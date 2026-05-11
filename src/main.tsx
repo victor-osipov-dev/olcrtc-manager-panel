@@ -124,22 +124,22 @@ const defaultForm: ClientForm = {
 const payloadFields: Record<string, Array<{ key: string; label: string; defaultValue: string }>> = {
   datachannel: [],
   vp8channel: [
-    { key: "vp8-fps", label: "FPS", defaultValue: "25" },
-    { key: "vp8-batch", label: "Batch", defaultValue: "1" },
+    { key: "vp8-fps", label: "FPS", defaultValue: "60" },
+    { key: "vp8-batch", label: "Batch", defaultValue: "64" },
   ],
   seichannel: [
-    { key: "fps", label: "FPS", defaultValue: "25" },
-    { key: "batch", label: "Batch", defaultValue: "1" },
+    { key: "fps", label: "FPS", defaultValue: "60" },
+    { key: "batch", label: "Batch", defaultValue: "64" },
     { key: "frag", label: "Fragment bytes", defaultValue: "900" },
     { key: "ack-ms", label: "ACK timeout ms", defaultValue: "2000" },
   ],
   videochannel: [
-    { key: "video-w", label: "Width", defaultValue: "640" },
-    { key: "video-h", label: "Height", defaultValue: "480" },
-    { key: "video-fps", label: "FPS", defaultValue: "25" },
-    { key: "video-bitrate", label: "Bitrate", defaultValue: "500000" },
+    { key: "video-w", label: "Width", defaultValue: "1080" },
+    { key: "video-h", label: "Height", defaultValue: "1080" },
+    { key: "video-fps", label: "FPS", defaultValue: "60" },
+    { key: "video-bitrate", label: "Bitrate", defaultValue: "5000k" },
     { key: "video-codec", label: "Codec", defaultValue: "qrcode" },
-    { key: "video-hw", label: "Hardware accel", defaultValue: "false" },
+    { key: "video-hw", label: "Hardware accel", defaultValue: "none" },
   ],
 };
 
@@ -159,8 +159,12 @@ function transportOptions(carrier: string) {
 function normalizeForm(form: ClientForm): ClientForm {
   const options = transportOptions(form.carrier);
   const transport = options.includes(form.transport) ? form.transport : options[0];
-  const allowed = new Set((payloadFields[transport] ?? []).map((field) => field.key));
+  const fields = payloadFields[transport] ?? [];
+  const allowed = new Set(fields.map((field) => field.key));
   const payload = Object.fromEntries(Object.entries(form.payload).filter(([key]) => allowed.has(key)));
+  for (const field of fields) {
+    if (!payload[field.key]?.trim()) payload[field.key] = field.defaultValue;
+  }
   return {
     ...form,
     transport,
