@@ -379,6 +379,33 @@ func run() error {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})))
+	handler.Handle("/api/tools/generate-room", adminAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req generateRoomRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.Carrier = strings.TrimSpace(req.Carrier)
+		req.DNS = strings.TrimSpace(req.DNS)
+		if req.Carrier == "" {
+			http.Error(w, "carrier is required", http.StatusBadRequest)
+			return
+		}
+		if req.DNS == "" {
+			req.DNS = "1.1.1.1:53"
+		}
+		roomID, err := generateRoomID(r.Context(), olcrtcPath, req.Carrier, req.DNS)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]string{"room_id": roomID})
+	})))
 	handler.Handle("/api/clients", adminAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -621,6 +648,7 @@ func (s *Supervisor) State() State {
 		clients[loc.ClientID] = append(clients[loc.ClientID], LocationState{
 			Name:      loc.Name,
 			RoomID:    loc.Endpoint.RoomID,
+			Key:       loc.Endpoint.Key,
 			URI:       locationURI(loc),
 			Carrier:   loc.Carrier,
 			Transport: loc.Transport.Type,
@@ -846,6 +874,7 @@ type ClientState struct {
 type LocationState struct {
 	Name      string            `json:"name"`
 	RoomID    string            `json:"room_id"`
+	Key       string            `json:"key"`
 	URI       string            `json:"uri"`
 	Carrier   string            `json:"carrier"`
 	Transport string            `json:"transport"`
@@ -877,6 +906,9 @@ type addClientRequest struct {
 	ClientID   string            `json:"client_id"`
 	FromClient string            `json:"from_client"`
 	Quota      Quota             `json:"quota"`
+	Locations  []locationRequest `json:"locations"`
+	RoomID     string            `json:"room_id"`
+	Key        string            `json:"key"`
 	Carrier    string            `json:"carrier"`
 	Transport  string            `json:"transport"`
 	Payload    map[string]string `json:"payload"`
@@ -886,11 +918,24 @@ type addClientRequest struct {
 
 type updateClientRequest struct {
 	Quota     Quota             `json:"quota"`
+	Locations []locationRequest `json:"locations"`
+	RoomID    string            `json:"room_id"`
+	Key       string            `json:"key"`
 	Carrier   string            `json:"carrier"`
 	Transport string            `json:"transport"`
 	Payload   map[string]string `json:"payload"`
 	DNS       string            `json:"dns"`
 	Name      string            `json:"name"`
+}
+
+type locationRequest struct {
+	Name      string            `json:"name"`
+	RoomID    string            `json:"room_id"`
+	Key       string            `json:"key"`
+	Carrier   string            `json:"carrier"`
+	Transport string            `json:"transport"`
+	Payload   map[string]string `json:"payload"`
+	DNS       string            `json:"dns"`
 }
 
 type locationActionRequest struct {
@@ -903,19 +948,21 @@ type clientActionRequest struct {
 	ClientID string `json:"client_id"`
 }
 
+type generateRoomRequest struct {
+	Carrier string `json:"carrier"`
+	DNS     string `json:"dns"`
+}
+
 func addClientFromRequest(ctx context.Context, configPath, olcrtcPath string, r *http.Request) (string, error) {
+	_ = ctx
+	_ = olcrtcPath
 	var req addClientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return "", fmt.Errorf("parse request: %w", err)
 	}
 	req.ClientID = strings.TrimSpace(req.ClientID)
 	req.FromClient = strings.TrimSpace(req.FromClient)
-	req.Carrier = strings.TrimSpace(req.Carrier)
-	req.Transport = strings.TrimSpace(req.Transport)
-	req.Payload = cleanPayload(req.Payload)
 	req.Quota = normalizeQuota(req.Quota)
-	req.DNS = strings.TrimSpace(req.DNS)
-	req.Name = strings.TrimSpace(req.Name)
 	if req.ClientID == "" {
 		return "", errors.New("client_id is required")
 	}
@@ -937,23 +984,12 @@ func addClientFromRequest(ctx context.Context, configPath, olcrtcPath string, r 
 		}
 	}
 
-	template, err := createLocationsFromRequest(cfg, req)
+	locations, err := createLocationsFromRequest(cfg, req)
 	if err != nil {
 		return "", err
 	}
-
-	locations := make([]Location, 0, len(template))
-	for _, loc := range template {
-		loc.ClientID = req.ClientID
-		loc.Endpoint.Key, err = randomHex(32)
-		if err != nil {
-			return "", err
-		}
-		loc.Endpoint.RoomID, err = generateRoomID(ctx, olcrtcPath, loc.Carrier, loc.DNS)
-		if err != nil {
-			return "", err
-		}
-		locations = append(locations, loc)
+	for i := range locations {
+		locations[i].ClientID = req.ClientID
 	}
 
 	cfg.Clients = append(cfg.Clients, Client{ClientID: req.ClientID, Quota: req.Quota, Locations: locations})
@@ -968,33 +1004,18 @@ func addClientFromRequest(ctx context.Context, configPath, olcrtcPath string, r 
 }
 
 func updateClientFromRequest(ctx context.Context, configPath, olcrtcPath, clientID string, r *http.Request) error {
+	_ = ctx
+	_ = olcrtcPath
 	var req updateClientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return fmt.Errorf("parse request: %w", err)
 	}
-	req.Carrier = strings.TrimSpace(req.Carrier)
-	req.Transport = strings.TrimSpace(req.Transport)
-	req.Payload = cleanPayload(req.Payload)
 	req.Quota = normalizeQuota(req.Quota)
-	req.DNS = strings.TrimSpace(req.DNS)
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Carrier == "" {
-		return errors.New("carrier is required")
-	}
-	if req.Transport == "" {
-		return errors.New("transport is required")
-	}
-	if req.DNS == "" {
-		return errors.New("dns is required")
-	}
-	transport := Transport{Type: req.Transport, Payload: req.Payload}
-	if !isSupported(req.Carrier, req.Transport) {
-		return fmt.Errorf("unsupported carrier/transport combination %s + %s", req.Carrier, req.Transport)
-	}
-	if err := validatePayload(transport); err != nil {
+	if err := validateQuota(req.Quota); err != nil {
 		return err
 	}
-	if err := validateQuota(req.Quota); err != nil {
+	locations, err := locationsFromUpdateRequest(clientID, req)
+	if err != nil {
 		return err
 	}
 
@@ -1008,28 +1029,8 @@ func updateClientFromRequest(ctx context.Context, configPath, olcrtcPath, client
 		if cfg.Clients[i].ClientID != clientID {
 			continue
 		}
-		if len(cfg.Clients[i].Locations) == 0 {
-			return fmt.Errorf("client %q has no locations", clientID)
-		}
 		cfg.Clients[i].Quota = req.Quota
-		loc := cfg.Clients[i].Locations[0]
-		if loc.Carrier != req.Carrier || loc.DNS != req.DNS {
-			loc.Endpoint.RoomID, err = generateRoomID(ctx, olcrtcPath, req.Carrier, req.DNS)
-			if err != nil {
-				return err
-			}
-		}
-		loc.Name = req.Name
-		if loc.Name == "" {
-			loc.Name = clientID
-		}
-		loc.ClientID = clientID
-		loc.Carrier = req.Carrier
-		loc.Transport = transport
-		loc.DNS = req.DNS
-		loc.Link = defaultString(loc.Link, "direct")
-		loc.Data = defaultString(loc.Data, "data")
-		cfg.Clients[i].Locations[0] = loc
+		cfg.Clients[i].Locations = locations
 
 		cfg.Normalize()
 		if err := cfg.Validate(); err != nil {
@@ -1041,7 +1042,60 @@ func updateClientFromRequest(ctx context.Context, configPath, olcrtcPath, client
 }
 
 func createLocationsFromRequest(cfg Config, req addClientRequest) ([]Location, error) {
-	if req.Carrier != "" || req.Transport != "" || req.DNS != "" {
+	if len(req.Locations) > 0 {
+		return buildLocations(req.ClientID, req.Locations)
+	}
+	if req.RoomID != "" || req.Key != "" || req.Carrier != "" || req.Transport != "" || req.DNS != "" || req.Name != "" {
+		return buildLocations(req.ClientID, []locationRequest{{
+			Name:      req.Name,
+			RoomID:    req.RoomID,
+			Key:       req.Key,
+			Carrier:   req.Carrier,
+			Transport: req.Transport,
+			Payload:   req.Payload,
+			DNS:       req.DNS,
+		}})
+	}
+	return templateLocations(cfg, req.FromClient)
+}
+
+func locationsFromUpdateRequest(clientID string, req updateClientRequest) ([]Location, error) {
+	if len(req.Locations) > 0 {
+		return buildLocations(clientID, req.Locations)
+	}
+	return buildLocations(clientID, []locationRequest{{
+		Name:      req.Name,
+		RoomID:    req.RoomID,
+		Key:       req.Key,
+		Carrier:   req.Carrier,
+		Transport: req.Transport,
+		Payload:   req.Payload,
+		DNS:       req.DNS,
+	}})
+}
+
+func buildLocations(clientID string, requests []locationRequest) ([]Location, error) {
+	if len(requests) == 0 {
+		return nil, errors.New("locations must not be empty")
+	}
+	locations := make([]Location, 0, len(requests))
+	seen := make(map[string]struct{}, len(requests))
+	for i, req := range requests {
+		req.Name = strings.TrimSpace(req.Name)
+		req.RoomID = strings.TrimSpace(req.RoomID)
+		req.Key = strings.TrimSpace(req.Key)
+		req.Carrier = strings.TrimSpace(req.Carrier)
+		req.Transport = strings.TrimSpace(req.Transport)
+		req.Payload = cleanPayload(req.Payload)
+		req.DNS = strings.TrimSpace(req.DNS)
+
+		prefix := fmt.Sprintf("locations[%d]", i)
+		if req.RoomID == "" || req.RoomID == "any" {
+			return nil, fmt.Errorf("%s.room_id must be concrete", prefix)
+		}
+		if err := validateRequestKey(req.Key); err != nil {
+			return nil, fmt.Errorf("%s.key: %w", prefix, err)
+		}
 		carrier := defaultString(req.Carrier, "wbstream")
 		transport := defaultString(req.Transport, "datachannel")
 		dns := defaultString(req.DNS, "1.1.1.1:53")
@@ -1050,23 +1104,43 @@ func createLocationsFromRequest(cfg Config, req addClientRequest) ([]Location, e
 			return nil, fmt.Errorf("unsupported carrier/transport combination %s + %s", carrier, transport)
 		}
 		if err := validatePayload(transportConfig); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s.transport: %w", prefix, err)
 		}
 		name := req.Name
 		if name == "" {
 			name = "Default location"
 		}
-		return []Location{{
+		loc := Location{
 			Name:      name,
-			ClientID:  req.ClientID,
+			ClientID:  clientID,
+			Endpoint:  Endpoint{RoomID: req.RoomID, Key: req.Key},
 			Carrier:   carrier,
 			Transport: transportConfig,
 			Link:      "direct",
 			Data:      "data",
 			DNS:       dns,
-		}}, nil
+		}
+		key := locationKey(loc)
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("%s location key %q is duplicated", prefix, key)
+		}
+		seen[key] = struct{}{}
+		locations = append(locations, loc)
 	}
-	return templateLocations(cfg, req.FromClient)
+	return locations, nil
+}
+
+func validateRequestKey(key string) error {
+	if key == "" {
+		return errors.New("is required")
+	}
+	if len(key) != 64 {
+		return errors.New("must be 64 hex characters")
+	}
+	if _, err := hex.DecodeString(key); err != nil {
+		return errors.New("must be 64 hex characters")
+	}
+	return nil
 }
 
 func deleteClient(configPath, clientID string) error {
@@ -1100,6 +1174,8 @@ func deleteClient(configPath, clientID string) error {
 }
 
 func addLocationFromRequest(ctx context.Context, configPath, olcrtcPath, clientID string, r *http.Request) error {
+	_ = ctx
+	_ = olcrtcPath
 	clientID = strings.TrimSpace(clientID)
 	var req addClientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1115,15 +1191,6 @@ func addLocationFromRequest(ctx context.Context, configPath, olcrtcPath, clientI
 	if err != nil {
 		return err
 	}
-	loc := locs[0]
-	loc.Endpoint.Key, err = randomHex(32)
-	if err != nil {
-		return err
-	}
-	loc.Endpoint.RoomID, err = generateRoomID(ctx, olcrtcPath, loc.Carrier, loc.DNS)
-	if err != nil {
-		return err
-	}
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return err
@@ -1131,7 +1198,7 @@ func addLocationFromRequest(ctx context.Context, configPath, olcrtcPath, clientI
 	cfg.ensureClientsFormat()
 	for i := range cfg.Clients {
 		if cfg.Clients[i].ClientID == clientID {
-			cfg.Clients[i].Locations = append(cfg.Clients[i].Locations, loc)
+			cfg.Clients[i].Locations = append(cfg.Clients[i].Locations, locs...)
 			cfg.Normalize()
 			if err := cfg.Validate(); err != nil {
 				return err

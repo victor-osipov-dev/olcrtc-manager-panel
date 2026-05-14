@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -20,6 +20,7 @@ import "./index.css";
 type LocationState = {
   name: string;
   room_id: string;
+  key: string;
   uri: string;
   carrier: string;
   transport: string;
@@ -94,14 +95,20 @@ type AuditEvent = {
   detail: string;
 };
 
-type ClientForm = {
-  client_id: string;
+type ClientLocationForm = {
   name: string;
-  quota: Quota;
+  room_id: string;
+  key: string;
   carrier: string;
   transport: string;
   payload: Record<string, string>;
   dns: string;
+};
+
+type ClientForm = {
+  client_id: string;
+  quota: Quota;
+  locations: ClientLocationForm[];
 };
 
 const carriers = ["wbstream", "jazz", "telemost"];
@@ -111,14 +118,20 @@ const transportsByCarrier: Record<string, string[]> = {
   telemost: ["vp8channel", "videochannel"],
 };
 
-const defaultForm: ClientForm = {
-  client_id: "",
+const defaultLocationForm: ClientLocationForm = {
   name: "",
-  quota: {},
+  room_id: "",
+  key: "",
   carrier: "wbstream",
   transport: "datachannel",
   payload: {},
   dns: "1.1.1.1:53",
+};
+
+const defaultForm: ClientForm = {
+  client_id: "",
+  quota: {},
+  locations: [{ ...defaultLocationForm }],
 };
 
 const payloadFields: Record<string, Array<{ key: string; label: string; defaultValue: string }>> = {
@@ -156,24 +169,37 @@ function transportOptions(carrier: string) {
   return transportsByCarrier[carrier] ?? transportsByCarrier.wbstream;
 }
 
-function normalizeForm(form: ClientForm): ClientForm {
-  const options = transportOptions(form.carrier);
-  const transport = options.includes(form.transport) ? form.transport : options[0];
+function normalizeLocationForm(location: ClientLocationForm): ClientLocationForm {
+  const options = transportOptions(location.carrier);
+  const transport = options.includes(location.transport) ? location.transport : options[0];
   const fields = payloadFields[transport] ?? [];
   const allowed = new Set(fields.map((field) => field.key));
-  const payload = Object.fromEntries(Object.entries(form.payload).filter(([key]) => allowed.has(key)));
+  const payload = Object.fromEntries(Object.entries(location.payload).filter(([key]) => allowed.has(key)));
   for (const field of fields) {
     if (!payload[field.key]?.trim()) payload[field.key] = field.defaultValue;
   }
   return {
-    ...form,
+    ...location,
     transport,
     payload,
   };
 }
 
+function normalizeForm(form: ClientForm): ClientForm {
+  return {
+    ...form,
+    locations: form.locations.length ? form.locations.map(normalizeLocationForm) : [{ ...defaultLocationForm }],
+  };
+}
+
 function payloadForSubmit(payload: Record<string, string>) {
   return Object.fromEntries(Object.entries(payload).filter(([, value]) => value.trim() !== ""));
+}
+
+function randomHex64() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function formatBytes(bytes?: number) {
@@ -194,6 +220,18 @@ function cleanQuota(quota: Quota): Quota {
     used_bytes: quota.used_bytes || undefined,
     expires_at: quota.expires_at?.trim() || undefined,
   };
+}
+
+function locationsForSubmit(locations: ClientLocationForm[]) {
+  return locations.map((location) => ({
+    name: location.name.trim(),
+    room_id: location.room_id.trim(),
+    key: location.key.trim(),
+    carrier: location.carrier,
+    transport: location.transport,
+    payload: payloadForSubmit(location.payload),
+    dns: location.dns.trim(),
+  }));
 }
 
 function quotaText(quota?: Quota) {
@@ -248,7 +286,7 @@ function Modal({
 }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
-      <div className="w-full max-w-lg rounded-lg border border-border bg-card shadow-2xl">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-lg border border-border bg-card shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <h2 className="text-lg font-semibold tracking-normal">{title}</h2>
           <button
@@ -356,7 +394,41 @@ function ClientFormFields({
   includeClientID: boolean;
 }) {
   const set = (patch: Partial<ClientForm>) => setForm(normalizeForm({ ...form, ...patch }));
-  const fields = payloadFields[form.transport] ?? [];
+  const [generateError, setGenerateError] = useState("");
+  const [generatingRoom, setGeneratingRoom] = useState<number | null>(null);
+
+  const setLocation = (index: number, patch: Partial<ClientLocationForm>) => {
+    const locations = form.locations.map((location, current) =>
+      current === index ? normalizeLocationForm({ ...location, ...patch }) : location,
+    );
+    set({ locations });
+  };
+
+  const addLocation = () => set({ locations: [...form.locations, { ...defaultLocationForm }] });
+
+  const removeLocation = (index: number) => {
+    if (form.locations.length <= 1) return;
+    set({ locations: form.locations.filter((_, current) => current !== index) });
+  };
+
+  const generateRoom = async (index: number) => {
+    const location = form.locations[index];
+    setGenerateError("");
+    setGeneratingRoom(index);
+    try {
+      const res = await request("/api/tools/generate-room", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ carrier: location.carrier, dns: location.dns.trim() }),
+      });
+      const body = (await res.json()) as { room_id: string };
+      setLocation(index, { room_id: body.room_id });
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGeneratingRoom(null);
+    }
+  };
 
   return (
     <div className="grid gap-4">
@@ -394,125 +466,191 @@ function ClientFormFields({
         </label>
       )}
       <div className="grid gap-3 rounded-md border border-border bg-background p-3">
-          <div className="text-sm font-medium text-foreground">Квоты клиента</div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <label className="grid gap-2 text-sm text-muted-foreground">
-              Скорость, Mbps
-              <input
-                className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
-                type="number"
-                min="0"
-                value={form.quota.speed_mbps ?? ""}
-                onChange={(event) => set({ quota: { ...form.quota, speed_mbps: Number(event.target.value) || undefined } })}
-                placeholder="без лимита"
-              />
-            </label>
-            <label className="grid gap-2 text-sm text-muted-foreground">
-              Трафик, GB
-              <input
-                className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
-                type="number"
-                min="0"
-                value={form.quota.traffic_gb ?? ""}
-                onChange={(event) => set({ quota: { ...form.quota, traffic_gb: Number(event.target.value) || undefined } })}
-                placeholder="без лимита"
-              />
-            </label>
-            <label className="grid gap-2 text-sm text-muted-foreground">
-              Использовано, GB
-              <input
-                className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
-                type="number"
-                min="0"
-                value={form.quota.used_gb ?? ""}
-                onChange={(event) => set({ quota: { ...form.quota, used_gb: Number(event.target.value) || undefined, used_bytes: undefined } })}
-                placeholder="0"
-              />
-            </label>
-            <label className="grid gap-2 text-sm text-muted-foreground">
-              Действует до
-              <input
-                className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
-                type="date"
-                value={form.quota.expires_at ?? ""}
-                onChange={(event) => set({ quota: { ...form.quota, expires_at: event.target.value || undefined } })}
-              />
-            </label>
-          </div>
+        <div className="text-sm font-medium text-foreground">Квоты клиента</div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="grid gap-2 text-sm text-muted-foreground">
+            Скорость, Mbps
+            <input
+              className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+              type="number"
+              min="0"
+              value={form.quota.speed_mbps ?? ""}
+              onChange={(event) => set({ quota: { ...form.quota, speed_mbps: Number(event.target.value) || undefined } })}
+              placeholder="без лимита"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-muted-foreground">
+            Трафик, GB
+            <input
+              className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+              type="number"
+              min="0"
+              value={form.quota.traffic_gb ?? ""}
+              onChange={(event) => set({ quota: { ...form.quota, traffic_gb: Number(event.target.value) || undefined } })}
+              placeholder="без лимита"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-muted-foreground">
+            Использовано, GB
+            <input
+              className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+              type="number"
+              min="0"
+              value={form.quota.used_gb ?? ""}
+              onChange={(event) => set({ quota: { ...form.quota, used_gb: Number(event.target.value) || undefined, used_bytes: undefined } })}
+              placeholder="0"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-muted-foreground">
+            Действует до
+            <input
+              className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+              type="date"
+              value={form.quota.expires_at ?? ""}
+              onChange={(event) => set({ quota: { ...form.quota, expires_at: event.target.value || undefined } })}
+            />
+          </label>
         </div>
-      <label className="grid gap-2 text-sm text-muted-foreground">
-        Название локации
-        <input
-          className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
-          value={form.name}
-          onChange={(event) => set({ name: event.target.value })}
-          placeholder="Default location"
-        />
-      </label>
-      <div className="grid gap-3 md:grid-cols-2">
-        <label className="grid gap-2 text-sm text-muted-foreground">
-          Carrier
-          <select
-            className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
-            value={form.carrier}
-            onChange={(event) => set({ carrier: event.target.value })}
-          >
-            {carriers.map((carrier) => (
-              <option key={carrier} value={carrier}>
-                {carrier}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="grid gap-2 text-sm text-muted-foreground">
-          Transport
-          <select
-            className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
-            value={form.transport}
-            onChange={(event) => set({ transport: event.target.value })}
-          >
-            {transportOptions(form.carrier).map((transport) => (
-              <option key={transport} value={transport}>
-                {transport}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
-      <label className="grid gap-2 text-sm text-muted-foreground">
-        DNS
-        <input
-          className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
-          value={form.dns}
-          onChange={(event) => set({ dns: event.target.value })}
-          placeholder="1.1.1.1:53"
-        />
-      </label>
-      {fields.length > 0 && (
-        <div className="grid gap-3 rounded-md border border-border bg-background p-3">
-          <div className="text-sm font-medium text-foreground">Параметры транспорта</div>
-          <div className="grid gap-3 md:grid-cols-2">
-            {fields.map((field) => (
-              <label key={field.key} className="grid gap-2 text-sm text-muted-foreground">
-                {field.label}
-                <input
+      {form.locations.map((location, index) => {
+        const fields = payloadFields[location.transport] ?? [];
+        return (
+          <div key={index} className="grid gap-3 rounded-md border border-border bg-background p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-medium text-foreground">Комната {index + 1}</div>
+              {form.locations.length > 1 && (
+                <button
+                  className="inline-flex h-8 items-center gap-2 rounded-md border border-destructive/40 px-2 text-sm text-destructive hover:bg-destructive/10"
+                  type="button"
+                  onClick={() => removeLocation(index)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Удалить
+                </button>
+              )}
+            </div>
+            <label className="grid gap-2 text-sm text-muted-foreground">
+              Название локации
+              <input
+                className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                value={location.name}
+                onChange={(event) => setLocation(index, { name: event.target.value })}
+                placeholder="Default location"
+              />
+            </label>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="grid gap-2 text-sm text-muted-foreground">
+                Carrier
+                <select
                   className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
-                  value={form.payload[field.key] ?? ""}
-                  onChange={(event) =>
-                    set({
-                      payload: {
-                        ...form.payload,
-                        [field.key]: event.target.value,
-                      },
-                    })
-                  }
-                  placeholder={field.defaultValue}
-                />
+                  value={location.carrier}
+                  onChange={(event) => setLocation(index, { carrier: event.target.value })}
+                >
+                  {carriers.map((carrier) => (
+                    <option key={carrier} value={carrier}>
+                      {carrier}
+                    </option>
+                  ))}
+                </select>
               </label>
-            ))}
+              <label className="grid gap-2 text-sm text-muted-foreground">
+                Transport
+                <select
+                  className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                  value={location.transport}
+                  onChange={(event) => setLocation(index, { transport: event.target.value })}
+                >
+                  {transportOptions(location.carrier).map((transport) => (
+                    <option key={transport} value={transport}>
+                      {transport}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="grid gap-2 text-sm text-muted-foreground">
+              Room ID
+              <div className="flex gap-2">
+                <input
+                  className="h-10 flex-1 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                  value={location.room_id}
+                  onChange={(event) => setLocation(index, { room_id: event.target.value })}
+                  placeholder="room-id"
+                />
+                <button
+                  className="inline-flex h-10 items-center rounded-md border border-primary bg-secondary px-3 text-xs font-medium text-primary hover:bg-primary/10 disabled:opacity-60"
+                  type="button"
+                  disabled={generatingRoom === index}
+                  onClick={() => generateRoom(index)}
+                >
+                  Generate
+                </button>
+              </div>
+            </label>
+            <label className="grid gap-2 text-sm text-muted-foreground">
+              Key
+              <div className="flex gap-2">
+                <input
+                  className="h-10 flex-1 rounded-md border border-border bg-card px-3 font-mono text-xs text-foreground outline-none focus:border-primary"
+                  value={location.key}
+                  onChange={(event) => setLocation(index, { key: event.target.value })}
+                  placeholder="64 hex chars"
+                />
+                <button
+                  className="inline-flex h-10 items-center rounded-md border border-primary bg-secondary px-3 text-xs font-medium text-primary hover:bg-primary/10"
+                  type="button"
+                  onClick={() => setLocation(index, { key: randomHex64() })}
+                >
+                  Generate
+                </button>
+              </div>
+            </label>
+            <label className="grid gap-2 text-sm text-muted-foreground">
+              DNS
+              <input
+                className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                value={location.dns}
+                onChange={(event) => setLocation(index, { dns: event.target.value })}
+                placeholder="1.1.1.1:53"
+              />
+            </label>
+            {fields.length > 0 && (
+              <div className="grid gap-3 rounded-md border border-border bg-card p-3">
+                <div className="text-sm font-medium text-foreground">Параметры транспорта</div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {fields.map((field) => (
+                    <label key={field.key} className="grid gap-2 text-sm text-muted-foreground">
+                      {field.label}
+                      <input
+                        className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+                        value={location.payload[field.key] ?? ""}
+                        onChange={(event) =>
+                          setLocation(index, {
+                            payload: {
+                              ...location.payload,
+                              [field.key]: event.target.value,
+                            },
+                          })
+                        }
+                        placeholder={field.defaultValue}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })}
+      {generateError && <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{generateError}</div>}
+      <button
+        className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
+        type="button"
+        onClick={addLocation}
+      >
+        <Plus className="h-4 w-4" />
+        Добавить комнату
+      </button>
     </div>
   );
 }
@@ -623,22 +761,25 @@ function App() {
   };
 
   const openCreate = () => {
-    setCreateForm(defaultForm);
+    setCreateForm(normalizeForm({ ...defaultForm, locations: [{ ...defaultLocationForm }] }));
     setCreateOpen(true);
   };
 
   const openEdit = (client: ClientState) => {
-    const loc = client.locations[0];
     setEditClient(client);
     setEditForm(
       normalizeForm({
         client_id: client.client_id,
-        name: loc?.name ?? client.client_id,
         quota: client.quota ?? {},
-        carrier: loc?.carrier ?? "wbstream",
-        transport: loc?.transport ?? "datachannel",
-        payload: loc?.payload ?? {},
-        dns: loc?.dns ?? "1.1.1.1:53",
+        locations: client.locations.map((loc) => ({
+          name: loc.name,
+          room_id: loc.room_id,
+          key: loc.key,
+          carrier: loc.carrier,
+          transport: loc.transport,
+          payload: loc.payload ?? {},
+          dns: loc.dns,
+        })),
       }),
     );
   };
@@ -651,16 +792,12 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           client_id: createForm.client_id.trim(),
-          name: createForm.name.trim(),
           quota: cleanQuota(createForm.quota),
-          carrier: createForm.carrier,
-          transport: createForm.transport,
-          payload: payloadForSubmit(createForm.payload),
-          dns: createForm.dns.trim(),
+          locations: locationsForSubmit(createForm.locations),
         }),
       });
       setCreateOpen(false);
-    }, "Клиент создан, room сгенерирован отдельно");
+    }, "Клиент создан");
 
   const updateClient = () =>
     runAction(async () => {
@@ -669,12 +806,8 @@ function App() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: editForm.name.trim(),
           quota: cleanQuota(editForm.quota),
-          carrier: editForm.carrier,
-          transport: editForm.transport,
-          payload: payloadForSubmit(editForm.payload),
-          dns: editForm.dns.trim(),
+          locations: locationsForSubmit(editForm.locations),
         }),
       });
       setEditClient(null);
@@ -706,26 +839,6 @@ function App() {
         }),
       });
     }, `${clientID} перезапущен`);
-
-  const regenerateRoom = (clientID: string) =>
-    runAction(async () => {
-      if (!window.confirm(`Сгенерировать новый room для ${clientID}? Старая ссылка перестанет работать.`)) return;
-      await request("/api/actions/regenerate-room", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ client_id: clientID }),
-      });
-    }, `Room для ${clientID} обновлен`);
-
-  const rotateKey = (clientID: string) =>
-    runAction(async () => {
-      if (!window.confirm(`Сменить ключ для ${clientID}? Старые ссылки перестанут работать.`)) return;
-      await request("/api/actions/rotate-key", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ client_id: clientID }),
-      });
-    }, `Ключ для ${clientID} обновлен`);
 
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -919,20 +1032,6 @@ function App() {
                             <button
                               className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
                               disabled={busy}
-                              onClick={() => regenerateRoom(client.client_id)}
-                            >
-                              Room
-                            </button>
-                            <button
-                              className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
-                              disabled={busy}
-                              onClick={() => rotateKey(client.client_id)}
-                            >
-                              Key
-                            </button>
-                            <button
-                              className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
-                              disabled={busy}
                               onClick={() => openLogs(client.client_id, loc)}
                             >
                               <Terminal className="h-4 w-4" />
@@ -1037,7 +1136,7 @@ function App() {
           <div className="p-5">
             <ClientFormFields form={editForm} setForm={setEditForm} includeClientID={false} />
             <div className="mt-3 rounded-md border border-border bg-background p-3 text-sm text-muted-foreground">
-              При изменении carrier или DNS будет создан новый room.
+              Список комнат сохраняется целиком: удаленные здесь carrier/transport будут удалены у клиента.
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button

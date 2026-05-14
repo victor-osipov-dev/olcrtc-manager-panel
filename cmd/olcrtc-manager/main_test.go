@@ -344,6 +344,116 @@ func TestConfigUnmarshalClientsFormat(t *testing.T) {
 	}
 }
 
+func TestAddClientUsesExplicitLocationsWithoutRoomGeneration(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	existing := testLocation("room-01", "Default")
+	if err := writeConfig(configPath, Config{
+		Name: "ScumVPN",
+		Port: 8888,
+		Clients: []Client{{
+			ClientID:  "default",
+			Locations: []Location{existing},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{
+		"client_id": "alice",
+		"locations": [
+			{
+				"name": "WB",
+				"room_id": "wb-room",
+				"key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"carrier": "wbstream",
+				"transport": "datachannel",
+				"dns": "1.1.1.1:53"
+			},
+			{
+				"name": "Telemost",
+				"room_id": "tele-room",
+				"key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				"carrier": "telemost",
+				"transport": "vp8channel",
+				"payload": {"vp8-fps": "60", "vp8-batch": "64"},
+				"dns": "1.1.1.1:53"
+			}
+		]
+	}`)
+
+	if _, err := addClientFromRequest(context.Background(), configPath, "/bin/false", httptest.NewRequest(http.MethodPost, "/api/clients", body)); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var alice *Client
+	for i := range cfg.Clients {
+		if cfg.Clients[i].ClientID == "alice" {
+			alice = &cfg.Clients[i]
+		}
+	}
+	if alice == nil {
+		t.Fatal("alice client was not saved")
+	}
+	if len(alice.Locations) != 2 {
+		t.Fatalf("locations = %d, want 2", len(alice.Locations))
+	}
+	if got := alice.Locations[0].Endpoint.RoomID; got != "wb-room" {
+		t.Fatalf("first room_id = %q, want wb-room", got)
+	}
+	if got := alice.Locations[1].Carrier + "/" + alice.Locations[1].Transport.Type; got != "telemost/vp8channel" {
+		t.Fatalf("second carrier/transport = %q", got)
+	}
+}
+
+func TestUpdateClientReplacesLocations(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	loc1 := testLocation("room-01", "WB")
+	loc2 := testLocation("room-02", "Telemost")
+	loc2.Carrier = "telemost"
+	loc2.Transport = Transport{Type: "vp8channel", Payload: map[string]string{"vp8-fps": "60", "vp8-batch": "64"}}
+	if err := writeConfig(configPath, Config{
+		Name: "ScumVPN",
+		Port: 8888,
+		Clients: []Client{{
+			ClientID:  "user",
+			Locations: []Location{loc1, loc2},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{
+		"locations": [{
+			"name": "Only WB",
+			"room_id": "room-01",
+			"key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"carrier": "wbstream",
+			"transport": "datachannel",
+			"dns": "1.1.1.1:53"
+		}]
+	}`)
+	if err := updateClientFromRequest(context.Background(), configPath, "/bin/false", "user", httptest.NewRequest(http.MethodPut, "/api/clients/user", body)); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Clients[0].Locations) != 1 {
+		t.Fatalf("locations = %d, want 1", len(cfg.Clients[0].Locations))
+	}
+	if got := cfg.Clients[0].Locations[0].Name; got != "Only WB" {
+		t.Fatalf("location name = %q, want Only WB", got)
+	}
+}
+
 func TestSupervisorReloadStartsAddedLocationAndUpdatesSubscription(t *testing.T) {
 	loc1 := testLocation("room-01", "Netherlands")
 	loc2 := testLocation("room-02", "Germany")
