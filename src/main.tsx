@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
+  ChevronDown,
+  ChevronRight,
   Copy,
   Edit3,
   KeyRound,
@@ -45,6 +47,12 @@ type LogLine = {
   time: string;
   stream: string;
   line: string;
+};
+
+type ClientLogGroup = {
+  location: LocationState;
+  lines: LogLine[];
+  error?: string;
 };
 
 type ClientState = {
@@ -384,6 +392,215 @@ function LoginView({ setupRequired, onLogin }: { setupRequired: boolean; onLogin
   );
 }
 
+function ClientSettingsFields({
+  form,
+  setForm,
+  includeClientID,
+}: {
+  form: ClientForm;
+  setForm: (form: ClientForm) => void;
+  includeClientID: boolean;
+}) {
+  const set = (patch: Partial<ClientForm>) => setForm(normalizeForm({ ...form, ...patch }));
+
+  return (
+    <div className="grid gap-4">
+      {includeClientID && (
+        <label className="grid gap-2 text-sm text-muted-foreground">
+          ID клиента
+          <div className="flex gap-2">
+            <input
+              className="h-10 flex-1 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+              value={form.client_id}
+              onChange={(event) => set({ client_id: event.target.value })}
+              placeholder="client-id"
+            />
+            <button
+              className="inline-flex h-10 items-center rounded-md border border-primary bg-secondary px-3 text-xs font-medium text-primary hover:bg-primary/10"
+              type="button"
+              onClick={() => {
+                const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+                const bytes = new Uint8Array(21);
+                crypto.getRandomValues(bytes);
+                let client_id = "";
+                for (let i = 0; i < bytes.length; i++) {
+                  client_id += ALPHABET[bytes[i] % 62];
+                }
+                set({ client_id });
+              }}
+            >
+              Generate
+            </button>
+          </div>
+        </label>
+      )}
+      <div className="grid gap-3 rounded-md border border-border bg-background p-3">
+        <div className="text-sm font-medium text-foreground">Квоты клиента</div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="grid gap-2 text-sm text-muted-foreground">
+            Скорость, Mbps
+            <input
+              className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+              type="number"
+              min="0"
+              value={form.quota.speed_mbps ?? ""}
+              onChange={(event) => set({ quota: { ...form.quota, speed_mbps: Number(event.target.value) || undefined } })}
+              placeholder="без лимита"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-muted-foreground">
+            Трафик, GB
+            <input
+              className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+              type="number"
+              min="0"
+              value={form.quota.traffic_gb ?? ""}
+              onChange={(event) => set({ quota: { ...form.quota, traffic_gb: Number(event.target.value) || undefined } })}
+              placeholder="без лимита"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-muted-foreground">
+            Использовано, GB
+            <input
+              className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+              type="number"
+              min="0"
+              value={form.quota.used_gb ?? ""}
+              onChange={(event) => set({ quota: { ...form.quota, used_gb: Number(event.target.value) || undefined, used_bytes: undefined } })}
+              placeholder="0"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-muted-foreground">
+            Действует до
+            <input
+              className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+              type="date"
+              value={form.quota.expires_at ?? ""}
+              onChange={(event) => set({ quota: { ...form.quota, expires_at: event.target.value || undefined } })}
+            />
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LocationFormFields({
+  location,
+  setLocation,
+}: {
+  location: ClientLocationForm;
+  setLocation: (location: ClientLocationForm) => void;
+}) {
+  const set = (patch: Partial<ClientLocationForm>) => setLocation(normalizeLocationForm({ ...location, ...patch }));
+  const fields = payloadFields[location.transport] ?? [];
+
+  return (
+    <div className="grid gap-3">
+      <label className="grid gap-2 text-sm text-muted-foreground">
+        Название локации
+        <input
+          className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+          value={location.name}
+          onChange={(event) => set({ name: event.target.value })}
+          placeholder="Default location"
+        />
+      </label>
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="grid gap-2 text-sm text-muted-foreground">
+          Carrier
+          <select
+            className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+            value={location.carrier}
+            onChange={(event) => set({ carrier: event.target.value })}
+          >
+            {carriers.map((carrier) => (
+              <option key={carrier} value={carrier}>
+                {carrier}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-2 text-sm text-muted-foreground">
+          Transport
+          <select
+            className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+            value={location.transport}
+            onChange={(event) => set({ transport: event.target.value })}
+          >
+            {transportOptions(location.carrier).map((transport) => (
+              <option key={transport} value={transport}>
+                {transport}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label className="grid gap-2 text-sm text-muted-foreground">
+        Room ID
+        <input
+          className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+          value={location.room_id}
+          onChange={(event) => set({ room_id: event.target.value })}
+          placeholder="room-id"
+        />
+      </label>
+      <label className="grid gap-2 text-sm text-muted-foreground">
+        Key
+        <div className="flex gap-2">
+          <input
+            className="h-10 flex-1 rounded-md border border-border bg-background px-3 font-mono text-xs text-foreground outline-none focus:border-primary"
+            value={location.key}
+            onChange={(event) => set({ key: event.target.value })}
+            placeholder="64 hex chars"
+          />
+          <button
+            className="inline-flex h-10 items-center rounded-md border border-primary bg-secondary px-3 text-xs font-medium text-primary hover:bg-primary/10"
+            type="button"
+            onClick={() => set({ key: randomHex64() })}
+          >
+            Generate
+          </button>
+        </div>
+      </label>
+      <label className="grid gap-2 text-sm text-muted-foreground">
+        DNS
+        <input
+          className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+          value={location.dns}
+          onChange={(event) => set({ dns: event.target.value })}
+          placeholder="1.1.1.1:53"
+        />
+      </label>
+      {fields.length > 0 && (
+        <div className="grid gap-3 rounded-md border border-border bg-background p-3">
+          <div className="text-sm font-medium text-foreground">Параметры транспорта</div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {fields.map((field) => (
+              <label key={field.key} className="grid gap-2 text-sm text-muted-foreground">
+                {field.label}
+                <input
+                  className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                  value={location.payload[field.key] ?? ""}
+                  onChange={(event) =>
+                    set({
+                      payload: {
+                        ...location.payload,
+                        [field.key]: event.target.value,
+                      },
+                    })
+                  }
+                  placeholder={field.defaultValue}
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ClientFormFields({
   form,
   setForm,
@@ -633,13 +850,19 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editClient, setEditClient] = useState<ClientState | null>(null);
+  const [createLocationClient, setCreateLocationClient] = useState<ClientState | null>(null);
+  const [editLocation, setEditLocation] = useState<{ client: ClientState; location: LocationState; index: number } | null>(null);
   const [logTarget, setLogTarget] = useState<{ clientID: string; location: LocationState } | null>(null);
+  const [clientLogTarget, setClientLogTarget] = useState<ClientState | null>(null);
   const [qrTarget, setQrTarget] = useState<{ clientID: string; location: LocationState } | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
+  const [clientLogs, setClientLogs] = useState<ClientLogGroup[]>([]);
   const [createForm, setCreateForm] = useState<ClientForm>(defaultForm);
   const [editForm, setEditForm] = useState<ClientForm>(defaultForm);
+  const [locationForm, setLocationForm] = useState<ClientLocationForm>(defaultLocationForm);
   const [passwordForm, setPasswordForm] = useState({ current: "", next: "", repeat: "" });
+  const [expandedClients, setExpandedClients] = useState<Record<string, boolean>>({});
 
   const checkAuth = async () => {
     try {
@@ -739,15 +962,27 @@ function App() {
       normalizeForm({
         client_id: client.client_id,
         quota: client.quota ?? {},
-        locations: client.locations.map((loc) => ({
-          name: loc.name,
-          room_id: loc.room_id,
-          key: loc.key,
-          carrier: loc.carrier,
-          transport: loc.transport,
-          payload: loc.payload ?? {},
-          dns: loc.dns,
-        })),
+        locations: [{ ...defaultLocationForm }],
+      }),
+    );
+  };
+
+  const openCreateLocation = (client: ClientState) => {
+    setCreateLocationClient(client);
+    setLocationForm({ ...defaultLocationForm });
+  };
+
+  const openEditLocation = (client: ClientState, location: LocationState, index: number) => {
+    setEditLocation({ client, location, index });
+    setLocationForm(
+      normalizeLocationForm({
+        name: location.name,
+        room_id: location.room_id,
+        key: location.key,
+        carrier: location.carrier,
+        transport: location.transport,
+        payload: location.payload ?? {},
+        dns: location.dns,
       }),
     );
   };
@@ -770,20 +1005,63 @@ function App() {
   const updateClient = () =>
     runAction(async () => {
       if (!editClient) return;
+      if (!editForm.client_id.trim()) throw new Error("Укажи ID клиента");
       await request(`/api/clients/${encodeURIComponent(editClient.client_id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          client_id: editForm.client_id.trim(),
           quota: cleanQuota(editForm.quota),
-          locations: locationsForSubmit(editForm.locations),
         }),
       });
       setEditClient(null);
     }, "Клиент обновлен");
 
+  const addLocation = () =>
+    runAction(async () => {
+      if (!createLocationClient) return;
+      await request(`/api/clients/${encodeURIComponent(createLocationClient.client_id)}/locations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          locations: locationsForSubmit([locationForm]),
+        }),
+      });
+      setCreateLocationClient(null);
+      setExpandedClients((current) => ({ ...current, [createLocationClient.client_id]: true }));
+    }, "Локация создана");
+
+  const updateLocation = () =>
+    runAction(async () => {
+      if (!editLocation) return;
+      const nextLocations = editLocation.client.locations.map((location, index) =>
+        index === editLocation.index
+          ? locationForm
+          : {
+              name: location.name,
+              room_id: location.room_id,
+              key: location.key,
+              carrier: location.carrier,
+              transport: location.transport,
+              payload: location.payload ?? {},
+              dns: location.dns,
+            },
+      );
+      await request(`/api/clients/${encodeURIComponent(editLocation.client.client_id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: editLocation.client.client_id,
+          quota: cleanQuota(editLocation.client.quota),
+          locations: locationsForSubmit(nextLocations),
+        }),
+      });
+      setEditLocation(null);
+    }, "Локация обновлена");
+
   const deleteClient = (id: string) =>
     runAction(async () => {
-      if (!window.confirm(`Удалить клиента ${id}?`)) return;
+      if (!window.confirm(`Удалить клиента ${id} и все его локации?`)) return;
       await request(`/api/clients/${encodeURIComponent(id)}`, { method: "DELETE" });
     }, "Клиент удален");
 
@@ -847,6 +1125,29 @@ function App() {
     }
   };
 
+  const openClientLogs = async (client: ClientState) => {
+    setClientLogs([]);
+    setNotice("");
+    setClientLogTarget(client);
+    const groups = await Promise.all(
+      client.locations.map(async (location) => {
+        try {
+          const res = await request(
+            `/api/logs/${encodeURIComponent(client.client_id)}/${encodeURIComponent(location.room_id)}/${encodeURIComponent(
+              location.transport,
+            )}`,
+            { cache: "no-store" },
+          );
+          const body = (await res.json()) as { logs: LogLine[] };
+          return { location, lines: body.logs ?? [] };
+        } catch (err) {
+          return { location, lines: [], error: err instanceof Error ? err.message : String(err) };
+        }
+      }),
+    );
+    setClientLogs(groups);
+  };
+
   const copyLogs = () =>
     runAction(async () => {
       await navigator.clipboard.writeText(
@@ -865,18 +1166,6 @@ function App() {
       await navigator.clipboard.writeText(subscriptionURL(clientID));
     }, `Subscription для ${clientID} скопирован`);
 
-  const downloadSubscription = async (clientID: string) => {
-    const res = await request(`/${encodeURIComponent(clientID)}/`, { cache: "no-store" });
-    const text = await res.text();
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${clientID}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   if (authenticated === null) {
     return <div className="grid min-h-screen place-items-center text-sm text-muted-foreground">Загрузка...</div>;
   }
@@ -892,7 +1181,7 @@ function App() {
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">OlcRTC Manager</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <HeaderMetric label="Panel mem" value={formatBytes(metrics?.memory.heap_alloc_bytes)} />
             <HeaderMetric label="Panel PID" value={metrics?.manager.pid ?? "..."} />
             <button
@@ -951,126 +1240,169 @@ function App() {
 
           <div className="mt-3 min-h-5 text-sm text-muted-foreground">{notice}</div>
 
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[820px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-muted-foreground">
-                  <th className="py-3 pr-3 font-medium">Клиент</th>
-                  <th className="py-3 pr-3 font-medium">Локация</th>
-                  <th className="py-3 pr-3 font-medium">Room</th>
-                  <th className="py-3 pr-3 font-medium">Carrier</th>
-                  <th className="py-3 pr-3 font-medium">Transport</th>
-                  <th className="py-3 pr-3 font-medium">Квота</th>
-                  <th className="py-3 pr-3 font-medium">DNS</th>
-                  <th className="py-3 pr-3 font-medium">Статус</th>
-                  <th className="py-3 text-right font-medium">Действия</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clients.flatMap((client) =>
-                  client.locations.map((loc, index) => (
-                    <tr key={`${client.client_id}-${loc.room_id}-${loc.transport}`} className="border-b border-border/70">
-                      <td className="py-3 pr-3 font-medium">{index === 0 ? client.client_id : ""}</td>
-                      <td className="py-3 pr-3">{loc.name || "Default"}</td>
-                      <td className="max-w-[220px] truncate py-3 pr-3 text-muted-foreground">{loc.room_id}</td>
-                      <td className="py-3 pr-3">{loc.carrier}</td>
-                      <td className="py-3 pr-3">{loc.transport}</td>
-                      <td className="py-3 pr-3 text-muted-foreground">{index === 0 ? quotaText(client.quota) : ""}</td>
-                      <td className="py-3 pr-3 text-muted-foreground">{loc.dns}</td>
-                      <td className="py-3 pr-3">
-                        <span
-                          className={`inline-flex rounded-full px-2 py-1 text-xs ${
-                            loc.runtime.running ? "bg-primary/15 text-primary" : "bg-destructive/15 text-destructive"
-                          }`}
-                        >
-                          {loc.runtime.status}
+          <div className="mt-4 grid gap-3">
+            {clients.map((client) => {
+              const expanded = expandedClients[client.client_id] ?? true;
+              const running = client.locations.filter((location) => location.runtime.running).length;
+
+              return (
+                <div key={client.client_id} className="overflow-hidden rounded-lg border border-border bg-background">
+                  <div className="grid gap-3 p-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                    <button
+                      className="flex min-w-0 items-center gap-3 text-left"
+                      onClick={() => setExpandedClients((current) => ({ ...current, [client.client_id]: !expanded }))}
+                    >
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border bg-card text-muted-foreground">
+                        {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate font-semibold">{client.client_id}</span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {client.locations.length} локац. · {running} running · {quotaText(client.quota)}
                         </span>
-                      </td>
-                      <td className="py-3 text-right">
-                        {
-                          <div className="flex justify-end gap-2">
-                            <button
-                              className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
-                              disabled={busy}
-                              onClick={() => restartLocation(client.client_id, loc)}
-                            >
-                              <RefreshCw className="h-4 w-4" />
-                              Restart
-                            </button>
-                            <button
-                              className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
-                              disabled={busy}
-                              onClick={() => openLogs(client.client_id, loc)}
-                            >
-                              <Terminal className="h-4 w-4" />
-                              Логи
-                            </button>
-                            <button
-                              className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
-                              disabled={busy}
-                              onClick={() => copyOlcBoxLink(client.client_id, loc.uri)}
-                            >
-                              <Copy className="h-4 w-4" />
-                              OlcBox
-                            </button>
-                            <button
-                              className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
-                              disabled={busy}
-                              onClick={() => setQrTarget({ clientID: client.client_id, location: loc })}
-                            >
-                              QR
-                            </button>
-                            {index === 0 && (
-                              <>
-                                <button
-                                  className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
-                                  disabled={busy}
-                                  onClick={() => copySubscription(client.client_id)}
-                                >
-                                  Sub
-                                </button>
-                                <button
-                                  className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
-                                  disabled={busy}
-                                  onClick={() => downloadSubscription(client.client_id)}
-                                >
-                                  Export
-                                </button>
-                              </>
-                            )}
-                            <button
-                              className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
-                              disabled={busy}
-                              onClick={() => openEdit(client)}
-                            >
-                              <Edit3 className="h-4 w-4" />
-                              Edit
-                            </button>
-                            <button
-                              className="inline-flex h-8 items-center gap-2 rounded-md border border-destructive/40 px-2 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-60"
-                              disabled={busy}
-                              onClick={() => deleteClient(client.client_id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                              Удалить
-                            </button>
-                            {client.locations.length > 1 && (
-                              <button
-                                className="inline-flex h-8 items-center gap-2 rounded-md border border-destructive/40 px-2 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-60"
-                                disabled={busy}
-                                onClick={() => deleteLocation(client.client_id, loc)}
-                              >
-                                -Loc
-                              </button>
-                            )}
-                          </div>
-                        }
-                      </td>
-                    </tr>
-                  )),
-                )}
-              </tbody>
-            </table>
+                      </span>
+                    </button>
+
+                    <div className="flex flex-wrap gap-2 lg:justify-end">
+                      <button
+                        className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
+                        disabled={busy}
+                        onClick={() => copySubscription(client.client_id)}
+                      >
+                        Sub
+                      </button>
+                      <button
+                        className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
+                        disabled={busy}
+                        onClick={() => openClientLogs(client)}
+                      >
+                        <Terminal className="h-4 w-4" />
+                        Логи
+                      </button>
+                      <button
+                        className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
+                        disabled={busy}
+                        onClick={() => openEdit(client)}
+                      >
+                        <Edit3 className="h-4 w-4" />
+                        Edit
+                      </button>
+                      <button
+                        className="inline-flex h-8 items-center gap-2 rounded-md border border-destructive/40 px-2 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-60"
+                        disabled={busy}
+                        onClick={() => deleteClient(client.client_id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Удалить
+                      </button>
+                    </div>
+                  </div>
+
+                  {expanded && (
+                    <div className="border-t border-border/70 p-3">
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-sm font-medium text-muted-foreground">Локации</div>
+                        <button
+                          className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
+                          disabled={busy}
+                          onClick={() => openCreateLocation(client)}
+                        >
+                          <Plus className="h-4 w-4" />
+                          Добавить локацию
+                        </button>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[920px] border-collapse text-sm">
+                          <thead>
+                            <tr className="border-b border-border text-left text-muted-foreground">
+                              <th className="py-2 pr-3 font-medium">Локация</th>
+                              <th className="py-2 pr-3 font-medium">Room</th>
+                              <th className="py-2 pr-3 font-medium">Carrier</th>
+                              <th className="py-2 pr-3 font-medium">Transport</th>
+                              <th className="py-2 pr-3 font-medium">DNS</th>
+                              <th className="py-2 pr-3 font-medium">Статус</th>
+                              <th className="py-2 text-right font-medium">Действия локации</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {client.locations.map((loc, index) => (
+                              <tr key={`${client.client_id}-${loc.room_id}-${loc.transport}-${index}`} className="border-b border-border/60 last:border-0">
+                                <td className="py-3 pr-3 font-medium">{loc.name || "Default"}</td>
+                                <td className="max-w-[220px] truncate py-3 pr-3 text-muted-foreground">{loc.room_id}</td>
+                                <td className="py-3 pr-3">{loc.carrier}</td>
+                                <td className="py-3 pr-3">{loc.transport}</td>
+                                <td className="py-3 pr-3 text-muted-foreground">{loc.dns}</td>
+                                <td className="py-3 pr-3">
+                                  <span
+                                    className={`inline-flex rounded-full px-2 py-1 text-xs ${
+                                      loc.runtime.running ? "bg-primary/15 text-primary" : "bg-destructive/15 text-destructive"
+                                    }`}
+                                  >
+                                    {loc.runtime.status}
+                                  </span>
+                                </td>
+                                <td className="py-3 text-right">
+                                  <div className="flex flex-wrap justify-end gap-2">
+                                    <button
+                                      className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
+                                      disabled={busy}
+                                      onClick={() => restartLocation(client.client_id, loc)}
+                                    >
+                                      <RefreshCw className="h-4 w-4" />
+                                      Restart
+                                    </button>
+                                    <button
+                                      className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
+                                      disabled={busy}
+                                      onClick={() => openLogs(client.client_id, loc)}
+                                    >
+                                      <Terminal className="h-4 w-4" />
+                                      Логи
+                                    </button>
+                                    <button
+                                      className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
+                                      disabled={busy}
+                                      onClick={() => copyOlcBoxLink(client.client_id, loc.uri)}
+                                    >
+                                      <Copy className="h-4 w-4" />
+                                      OlcBox
+                                    </button>
+                                    <button
+                                      className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
+                                      disabled={busy}
+                                      onClick={() => setQrTarget({ clientID: client.client_id, location: loc })}
+                                    >
+                                      QR
+                                    </button>
+                                    <button
+                                      className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-sm hover:bg-muted disabled:opacity-60"
+                                      disabled={busy}
+                                      onClick={() => openEditLocation(client, loc, index)}
+                                    >
+                                      <Edit3 className="h-4 w-4" />
+                                      Edit
+                                    </button>
+                                    <button
+                                      className="inline-flex h-8 items-center gap-2 rounded-md border border-destructive/40 px-2 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-60"
+                                      disabled={busy || client.locations.length <= 1}
+                                      title={client.locations.length <= 1 ? "Последнюю локацию удалить нельзя" : undefined}
+                                      onClick={() => deleteLocation(client.client_id, loc)}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                      Удалить
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
       </main>
@@ -1102,10 +1434,7 @@ function App() {
       {editClient && (
         <Modal title={`Редактировать ${editClient.client_id}`} onClose={() => setEditClient(null)}>
           <div className="p-5">
-            <ClientFormFields form={editForm} setForm={setEditForm} includeClientID={false} />
-            <div className="mt-3 rounded-md border border-border bg-background p-3 text-sm text-muted-foreground">
-              Список комнат сохраняется целиком: удаленные здесь carrier/transport будут удалены у клиента.
-            </div>
+            <ClientSettingsFields form={editForm} setForm={setEditForm} includeClientID />
             <div className="mt-5 flex justify-end gap-2">
               <button
                 className="h-9 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
@@ -1117,6 +1446,54 @@ function App() {
                 className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-black hover:bg-primary/90 disabled:opacity-60"
                 disabled={busy}
                 onClick={updateClient}
+              >
+                <Edit3 className="h-4 w-4" />
+                Сохранить
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {createLocationClient && (
+        <Modal title={`Добавить локацию ${createLocationClient.client_id}`} onClose={() => setCreateLocationClient(null)}>
+          <div className="p-5">
+            <LocationFormFields location={locationForm} setLocation={setLocationForm} />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="h-9 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
+                onClick={() => setCreateLocationClient(null)}
+              >
+                Отмена
+              </button>
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-black hover:bg-primary/90 disabled:opacity-60"
+                disabled={busy}
+                onClick={addLocation}
+              >
+                <Plus className="h-4 w-4" />
+                Создать
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {editLocation && (
+        <Modal title={`Редактировать локацию ${editLocation.location.name || editLocation.location.room_id}`} onClose={() => setEditLocation(null)}>
+          <div className="p-5">
+            <LocationFormFields location={locationForm} setLocation={setLocationForm} />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="h-9 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
+                onClick={() => setEditLocation(null)}
+              >
+                Отмена
+              </button>
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-black hover:bg-primary/90 disabled:opacity-60"
+                disabled={busy}
+                onClick={updateLocation}
               >
                 <Edit3 className="h-4 w-4" />
                 Сохранить
@@ -1202,6 +1579,49 @@ function App() {
               >
                 <KeyRound className="h-4 w-4" />
                 Сохранить
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {clientLogTarget && (
+        <Modal title={`Логи ${clientLogTarget.client_id}`} onClose={() => setClientLogTarget(null)}>
+          <div className="p-5">
+            <div className="max-h-[520px] overflow-auto rounded-md border border-border bg-black p-3 font-mono text-xs text-slate-100">
+              {clientLogs.length === 0 ? (
+                <div className="text-muted-foreground">Загрузка логов...</div>
+              ) : (
+                clientLogs.map((group) => (
+                  <div key={`${group.location.room_id}-${group.location.transport}`} className="mb-5 last:mb-0">
+                    <div className="mb-2 text-[11px] uppercase text-muted-foreground">
+                      {group.location.name || "Default"} · {group.location.transport} · {group.location.runtime.status}
+                    </div>
+                    {group.error ? (
+                      <div className="text-muted-foreground">Логи недоступны: {group.error}</div>
+                    ) : group.lines.length === 0 ? (
+                      <div className="text-muted-foreground">Логов пока нет</div>
+                    ) : (
+                      group.lines.map((line, index) => (
+                        <div key={`${line.time}-${index}`} className="whitespace-pre-wrap break-words">
+                          <span className={line.stream === "stderr" ? "text-destructive" : "text-primary"}>
+                            {line.stream}
+                          </span>{" "}
+                          <span className="text-muted-foreground">{line.time}</span> {line.line}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="h-9 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
+                onClick={() => openClientLogs(clientLogTarget)}
+              >
+                Обновить
               </button>
             </div>
           </div>

@@ -917,6 +917,7 @@ type addClientRequest struct {
 }
 
 type updateClientRequest struct {
+	ClientID  string            `json:"client_id"`
 	Quota     Quota             `json:"quota"`
 	Locations []locationRequest `json:"locations"`
 	RoomID    string            `json:"room_id"`
@@ -1010,13 +1011,26 @@ func updateClientFromRequest(ctx context.Context, configPath, olcrtcPath, client
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return fmt.Errorf("parse request: %w", err)
 	}
+	req.ClientID = strings.TrimSpace(req.ClientID)
 	req.Quota = normalizeQuota(req.Quota)
 	if err := validateQuota(req.Quota); err != nil {
 		return err
 	}
-	locations, err := locationsFromUpdateRequest(clientID, req)
-	if err != nil {
-		return err
+	nextClientID := clientID
+	if req.ClientID != "" {
+		nextClientID = req.ClientID
+	}
+	if strings.Contains(nextClientID, "/") {
+		return errors.New("client_id must not contain slash")
+	}
+
+	var locations []Location
+	if updateRequestHasLocations(req) {
+		var err error
+		locations, err = locationsFromUpdateRequest(nextClientID, req)
+		if err != nil {
+			return err
+		}
 	}
 
 	cfg, err := loadConfig(configPath)
@@ -1029,8 +1043,21 @@ func updateClientFromRequest(ctx context.Context, configPath, olcrtcPath, client
 		if cfg.Clients[i].ClientID != clientID {
 			continue
 		}
+		if nextClientID != clientID {
+			for _, client := range cfg.Clients {
+				if client.ClientID == nextClientID {
+					return fmt.Errorf("client %q already exists", nextClientID)
+				}
+			}
+			cfg.Clients[i].ClientID = nextClientID
+			for j := range cfg.Clients[i].Locations {
+				cfg.Clients[i].Locations[j].ClientID = nextClientID
+			}
+		}
 		cfg.Clients[i].Quota = req.Quota
-		cfg.Clients[i].Locations = locations
+		if locations != nil {
+			cfg.Clients[i].Locations = locations
+		}
 
 		cfg.Normalize()
 		if err := cfg.Validate(); err != nil {
@@ -1039,6 +1066,17 @@ func updateClientFromRequest(ctx context.Context, configPath, olcrtcPath, client
 		return saveConfig(configPath, cfg)
 	}
 	return fmt.Errorf("client %q not found", clientID)
+}
+
+func updateRequestHasLocations(req updateClientRequest) bool {
+	return len(req.Locations) > 0 ||
+		req.RoomID != "" ||
+		req.Key != "" ||
+		req.Carrier != "" ||
+		req.Transport != "" ||
+		req.DNS != "" ||
+		req.Name != "" ||
+		len(req.Payload) > 0
 }
 
 func createLocationsFromRequest(cfg Config, req addClientRequest) ([]Location, error) {

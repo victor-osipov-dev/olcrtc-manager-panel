@@ -466,6 +466,71 @@ func TestUpdateClientReplacesLocations(t *testing.T) {
 	}
 }
 
+func TestUpdateClientQuotaKeepsLocations(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	loc1 := testLocation("room-01", "WB")
+	loc2 := testLocation("room-02", "Telemost")
+	if err := writeConfig(configPath, Config{
+		Name: "ScumVPN",
+		Port: 8888,
+		Clients: []Client{{
+			ClientID:  "user",
+			Locations: []Location{loc1, loc2},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"quota":{"speed_mbps":50,"traffic_gb":100}}`)
+	if err := updateClientFromRequest(context.Background(), configPath, "/bin/false", "user", httptest.NewRequest(http.MethodPut, "/api/clients/user", body)); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(cfg.Clients[0].Locations); got != 2 {
+		t.Fatalf("locations = %d, want 2", got)
+	}
+	if got := cfg.Clients[0].Quota.SpeedMbps; got != 50 {
+		t.Fatalf("speed_mbps = %d, want 50", got)
+	}
+}
+
+func TestUpdateClientRenamesLocationOwners(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	loc := testLocation("room-01", "WB")
+	if err := writeConfig(configPath, Config{
+		Name: "ScumVPN",
+		Port: 8888,
+		Clients: []Client{{
+			ClientID:  "user",
+			Locations: []Location{loc},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := bytes.NewBufferString(`{"client_id":"renamed"}`)
+	if err := updateClientFromRequest(context.Background(), configPath, "/bin/false", "user", httptest.NewRequest(http.MethodPut, "/api/clients/user", body)); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Clients[0].ClientID; got != "renamed" {
+		t.Fatalf("client_id = %q, want renamed", got)
+	}
+	if got := cfg.Clients[0].Locations[0].ClientID; got != "renamed" {
+		t.Fatalf("location client-id = %q, want renamed", got)
+	}
+}
+
 func TestSupervisorReloadStartsAddedLocationAndUpdatesSubscription(t *testing.T) {
 	loc1 := testLocation("room-01", "Netherlands")
 	loc2 := testLocation("room-02", "Germany")
