@@ -12,6 +12,7 @@ import {
   Plus,
   RefreshCw,
   Server,
+  Settings,
   Terminal,
   Trash2,
   Users,
@@ -72,9 +73,20 @@ type Quota = {
 type State = {
   name: string;
   port: number;
+  subscription_path: string;
   client_count: number;
   running_count: number;
   clients: ClientState[];
+};
+
+type SettingsState = {
+  name: string;
+  port: number;
+  subscription_path: string;
+  admin_user: string;
+  port_override: boolean;
+  restart_required?: boolean;
+  subscription_base_url: string;
 };
 
 type Metrics = {
@@ -119,6 +131,12 @@ type ClientForm = {
   locations: ClientLocationForm[];
 };
 
+type SettingsForm = {
+  name: string;
+  port: string;
+  subscription_path: string;
+};
+
 const carriers = ["jitsi", "wbstream", "telemost", "jazz"];
 const transportsByCarrier: Record<string, string[]> = {
   jitsi: ["datachannel", "vp8channel", "seichannel", "videochannel"],
@@ -141,6 +159,12 @@ const defaultForm: ClientForm = {
   client_id: "",
   quota: {},
   locations: [{ ...defaultLocationForm }],
+};
+
+const defaultSettingsForm: SettingsForm = {
+  name: "",
+  port: "",
+  subscription_path: "",
 };
 
 const payloadFields: Record<string, Array<{ key: string; label: string; defaultValue: string }>> = {
@@ -225,8 +249,10 @@ function formatBytes(bytes?: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function subscriptionURL(clientID: string) {
-  return `${window.location.origin}/${encodeURIComponent(clientID)}/`;
+function subscriptionURL(clientID: string, subscriptionPath?: string) {
+  const path = subscriptionPath?.trim().replace(/^\/+|\/+$/g, "");
+  const prefix = path ? `/${path}` : "";
+  return `${window.location.origin}${prefix}/${encodeURIComponent(clientID)}/`;
 }
 
 function cleanQuota(quota: Quota): Quota {
@@ -853,6 +879,7 @@ function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
   const [state, setState] = useState<State | null>(null);
+  const [settings, setSettings] = useState<SettingsState | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [notice, setNotice] = useState("");
@@ -864,12 +891,13 @@ function App() {
   const [logTarget, setLogTarget] = useState<{ clientID: string; location: LocationState } | null>(null);
   const [clientLogTarget, setClientLogTarget] = useState<ClientState | null>(null);
   const [qrTarget, setQrTarget] = useState<{ clientID: string; location: LocationState } | null>(null);
-  const [showPassword, setShowPassword] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [clientLogs, setClientLogs] = useState<ClientLogGroup[]>([]);
   const [createForm, setCreateForm] = useState<ClientForm>(defaultForm);
   const [editForm, setEditForm] = useState<ClientForm>(defaultForm);
   const [locationForm, setLocationForm] = useState<ClientLocationForm>(defaultLocationForm);
+  const [settingsForm, setSettingsForm] = useState<SettingsForm>(defaultSettingsForm);
   const [passwordForm, setPasswordForm] = useState({ current: "", next: "", repeat: "" });
   const [expandedClients, setExpandedClients] = useState<Record<string, boolean>>({});
 
@@ -900,7 +928,7 @@ function App() {
 
   const afterLogin = async () => {
     await checkAuth();
-    await Promise.all([loadState(), loadMetrics(), loadAudit()]).catch((err) => setNotice(err.message));
+    await Promise.all([loadState(), loadSettings(), loadMetrics(), loadAudit()]).catch((err) => setNotice(err.message));
   };
 
   const loadState = async () => {
@@ -911,6 +939,17 @@ function App() {
   const loadMetrics = async () => {
     const res = await request("/api/metrics", { cache: "no-store" });
     setMetrics((await res.json()) as Metrics);
+  };
+
+  const loadSettings = async () => {
+    const res = await request("/api/settings", { cache: "no-store" });
+    const body = (await res.json()) as SettingsState;
+    setSettings(body);
+    setSettingsForm({
+      name: body.name,
+      port: String(body.port),
+      subscription_path: body.subscription_path,
+    });
   };
 
   const loadAudit = async () => {
@@ -931,7 +970,7 @@ function App() {
 
   useEffect(() => {
     if (!authenticated) return;
-    Promise.all([loadState(), loadMetrics(), loadAudit()]).catch((err) => setNotice(err.message));
+    Promise.all([loadState(), loadSettings(), loadMetrics(), loadAudit()]).catch((err) => setNotice(err.message));
   }, [authenticated]);
 
   useEffect(() => {
@@ -943,6 +982,7 @@ function App() {
   }, [authenticated]);
 
   const clients = state?.clients ?? [];
+  const currentSubscriptionPath = settings?.subscription_path ?? state?.subscription_path ?? "";
 
   const runAction = async (action: () => Promise<void>, okText: string) => {
     setBusy(true);
@@ -979,6 +1019,16 @@ function App() {
   const openCreateLocation = (client: ClientState) => {
     setCreateLocationClient(client);
     setLocationForm({ ...defaultLocationForm });
+  };
+
+  const openSettings = async () => {
+    setShowSettings(true);
+    setNotice("");
+    try {
+      await loadSettings();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const openEditLocation = (client: ClientState, location: LocationState, index: number) => {
@@ -1099,6 +1149,7 @@ function App() {
     await fetch("/api/auth/logout", { method: "POST" });
     setAuthenticated(false);
     setState(null);
+    setSettings(null);
     setMetrics(null);
   };
 
@@ -1111,9 +1162,45 @@ function App() {
         body: JSON.stringify({ current_password: passwordForm.current, new_password: passwordForm.next }),
       });
       setPasswordForm({ current: "", next: "", repeat: "" });
-      setShowPassword(false);
       setAuthenticated(false);
     }, "Пароль изменен, войди заново");
+
+  const saveSettings = async () => {
+    setBusy(true);
+    setNotice("");
+    try {
+      const port = Number(settingsForm.port);
+      if (!settingsForm.name.trim()) throw new Error("Укажи название сервера");
+      if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("Порт должен быть от 1 до 65535");
+      const res = await request("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: settingsForm.name.trim(),
+          port,
+          subscription_path: settingsForm.subscription_path.trim(),
+        }),
+      });
+      const body = (await res.json()) as SettingsState;
+      setSettings(body);
+      setSettingsForm({
+        name: body.name,
+        port: String(body.port),
+        subscription_path: body.subscription_path,
+      });
+      await loadState();
+      await loadAudit();
+      if (body.restart_required) {
+        setNotice("Настройки сохранены. Новый порт применится после рестарта сервиса.");
+      } else {
+        setNotice("Настройки сохранены");
+      }
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const openLogs = async (clientID: string, location: LocationState) => {
     setLogs([]);
@@ -1172,7 +1259,7 @@ function App() {
 
   const copySubscription = (clientID: string) =>
     runAction(async () => {
-      await navigator.clipboard.writeText(subscriptionURL(clientID));
+      await navigator.clipboard.writeText(subscriptionURL(clientID, currentSubscriptionPath));
     }, `Subscription для ${clientID} скопирован`);
 
   if (authenticated === null) {
@@ -1195,10 +1282,10 @@ function App() {
             <HeaderMetric label="Panel PID" value={metrics?.manager.pid ?? "..."} />
             <button
               className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
-              onClick={() => setShowPassword(true)}
+              onClick={openSettings}
             >
-              <KeyRound className="h-4 w-4" />
-              Пароль
+              <Settings className="h-4 w-4" />
+              Настройки
             </button>
             <button
               className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80 disabled:opacity-60"
@@ -1541,55 +1628,117 @@ function App() {
         </Modal>
       )}
 
-      {showPassword && (
-        <Modal title="Сменить пароль" onClose={() => setShowPassword(false)}>
-          <div className="grid gap-4 p-5">
-            <label className="grid gap-2 text-sm text-muted-foreground">
-              Текущий пароль
-              <input
-                className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
-                type="password"
-                value={passwordForm.current}
-                onChange={(event) => setPasswordForm({ ...passwordForm, current: event.target.value })}
-                autoComplete="current-password"
-              />
-            </label>
-            <label className="grid gap-2 text-sm text-muted-foreground">
-              Новый пароль
-              <input
-                className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
-                type="password"
-                value={passwordForm.next}
-                onChange={(event) => setPasswordForm({ ...passwordForm, next: event.target.value })}
-                autoComplete="new-password"
-              />
-            </label>
-            <label className="grid gap-2 text-sm text-muted-foreground">
-              Повтор нового пароля
-              <input
-                className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
-                type="password"
-                value={passwordForm.repeat}
-                onChange={(event) => setPasswordForm({ ...passwordForm, repeat: event.target.value })}
-                autoComplete="new-password"
-              />
-            </label>
+      {showSettings && (
+        <Modal title="Настройки" onClose={() => setShowSettings(false)}>
+          <div className="grid gap-5 p-5">
+            <section className="grid gap-3 rounded-md border border-border bg-background p-4">
+              <div className="text-sm font-medium text-foreground">Сервер</div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-2 text-sm text-muted-foreground">
+                  Название
+                  <input
+                    className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                    value={settingsForm.name}
+                    onChange={(event) => setSettingsForm({ ...settingsForm, name: event.target.value })}
+                    placeholder="OlcRTC VPS"
+                  />
+                </label>
+                <label className="grid gap-2 text-sm text-muted-foreground">
+                  Порт панели
+                  <input
+                    className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                    type="number"
+                    min="1"
+                    max="65535"
+                    value={settingsForm.port}
+                    onChange={(event) => setSettingsForm({ ...settingsForm, port: event.target.value })}
+                  />
+                </label>
+              </div>
+              {settings?.port_override && (
+                <div className="text-xs text-muted-foreground">Порт сейчас переопределён аргументом запуска менеджера.</div>
+              )}
+            </section>
+
+            <section className="grid gap-3 rounded-md border border-border bg-background p-4">
+              <div className="text-sm font-medium text-foreground">Подписки</div>
+              <label className="grid gap-2 text-sm text-muted-foreground">
+                Путь
+                <input
+                  className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                  value={settingsForm.subscription_path}
+                  onChange={(event) => setSettingsForm({ ...settingsForm, subscription_path: event.target.value })}
+                  placeholder="sub"
+                />
+              </label>
+              <div className="break-all rounded-md border border-border bg-card p-3 font-mono text-xs text-muted-foreground">
+                {subscriptionURL("client-id", settingsForm.subscription_path)}
+              </div>
+            </section>
+
             <div className="flex justify-end gap-2">
               <button
                 className="h-9 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
-                onClick={() => setShowPassword(false)}
+                onClick={() => setShowSettings(false)}
               >
-                Отмена
+                Закрыть
               </button>
               <button
                 className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-black hover:bg-primary/90 disabled:opacity-60"
                 disabled={busy}
-                onClick={changePassword}
+                onClick={saveSettings}
               >
-                <KeyRound className="h-4 w-4" />
-                Сохранить
+                <Settings className="h-4 w-4" />
+                Сохранить настройки
               </button>
             </div>
+
+            <section className="grid gap-3 rounded-md border border-border bg-background p-4">
+              <div className="text-sm font-medium text-foreground">Пароль администратора</div>
+              {settings?.admin_user && <div className="text-xs text-muted-foreground">Пользователь: {settings.admin_user}</div>}
+              <label className="grid gap-2 text-sm text-muted-foreground">
+                Текущий пароль
+                <input
+                  className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                  type="password"
+                  value={passwordForm.current}
+                  onChange={(event) => setPasswordForm({ ...passwordForm, current: event.target.value })}
+                  autoComplete="current-password"
+                />
+              </label>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-2 text-sm text-muted-foreground">
+                  Новый пароль
+                  <input
+                    className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                    type="password"
+                    value={passwordForm.next}
+                    onChange={(event) => setPasswordForm({ ...passwordForm, next: event.target.value })}
+                    autoComplete="new-password"
+                  />
+                </label>
+                <label className="grid gap-2 text-sm text-muted-foreground">
+                  Повтор нового пароля
+                  <input
+                    className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                    type="password"
+                    value={passwordForm.repeat}
+                    onChange={(event) => setPasswordForm({ ...passwordForm, repeat: event.target.value })}
+                    autoComplete="new-password"
+                  />
+                </label>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80 disabled:opacity-60"
+                  disabled={busy}
+                  onClick={changePassword}
+                >
+                  <KeyRound className="h-4 w-4" />
+                  Сменить пароль
+                </button>
+              </div>
+            </section>
           </div>
         </Modal>
       )}

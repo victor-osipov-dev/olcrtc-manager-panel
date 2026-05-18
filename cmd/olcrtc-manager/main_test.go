@@ -200,6 +200,35 @@ func TestSubscriptionHandlerServesClientPath(t *testing.T) {
 	}
 }
 
+func TestSubscriptionHandlerServesConfiguredBasePath(t *testing.T) {
+	supervisor := NewSupervisor("olcrtc", func(ctx context.Context, path string, loc Location) (*process, error) {
+		return &process{location: loc, logs: newLogBuffer(1), running: true}, nil
+	})
+	loc := testLocation("room-01", "Netherlands")
+	cfg := testConfig(loc)
+	cfg.SubscriptionPath = "sub"
+	if err := supervisor.StartAll(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/sub/user/", nil)
+	rec := httptest.NewRecorder()
+	subscriptionHandler(supervisor).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Body.String(); !strings.Contains(got, "%user$Netherlands") {
+		t.Fatalf("response missing user subscription:\n%s", got)
+	}
+
+	rec = httptest.NewRecorder()
+	subscriptionHandler(supervisor).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/user/", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("root status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
 func TestSubscriptionHandlerRejectsRootAndUnknownClient(t *testing.T) {
 	supervisor := NewSupervisor("olcrtc", func(ctx context.Context, path string, loc Location) (*process, error) {
 		return &process{location: loc, logs: newLogBuffer(1), running: true}, nil
@@ -215,6 +244,36 @@ func TestSubscriptionHandlerRejectsRootAndUnknownClient(t *testing.T) {
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s status = %d, want %d", path, rec.Code, http.StatusNotFound)
 		}
+	}
+}
+
+func TestUpdateSettingsNormalizesSubscriptionPath(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := writeConfig(configPath, Config{
+		Name: "Old",
+		Port: 8888,
+		Clients: []Client{{
+			ClientID:  "user",
+			Locations: []Location{testLocation("room-01", "Netherlands")},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, restartRequired, err := updateSettings(configPath, updateSettingsRequest{
+		Name:             "New",
+		Port:             9443,
+		SubscriptionPath: "/subscription/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restartRequired {
+		t.Fatal("restartRequired = false, want true")
+	}
+	if cfg.Name != "New" || cfg.Port != 9443 || cfg.SubscriptionPath != "subscription" {
+		t.Fatalf("settings = %#v", cfg)
 	}
 }
 

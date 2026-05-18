@@ -47,6 +47,7 @@ type Config struct {
 	LegacyVersion    int        `json:"vesion"`
 	Name             string     `json:"name"`
 	Port             int        `json:"port"`
+	SubscriptionPath string     `json:"subscription_path"`
 	ActiveLocationID string     `json:"active_location_id"`
 	Clients          []Client   `json:"clients"`
 	Locations        []Location `json:"locations"`
@@ -335,6 +336,7 @@ func run() error {
 	handler.Handle("/api/auth/logout", adminAuth(http.HandlerFunc(logoutHandler)))
 	handler.Handle("/api/auth/me", http.HandlerFunc(authMeHandler(configPath)))
 	handler.Handle("/api/auth/password", adminAuth(http.HandlerFunc(changePasswordHandler(configPath))))
+	handler.Handle("/api/settings", adminAuth(http.HandlerFunc(settingsHandler(configPath, supervisor, port != 0))))
 	handler.Handle("/api/reload", adminAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -690,6 +692,14 @@ func (s *Supervisor) StopAll() {
 	s.processes = make(map[string]*process)
 }
 
+func (s *Supervisor) UpdateSettings(cfg Config) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.Name = cfg.Name
+	s.cfg.Port = cfg.Port
+	s.cfg.SubscriptionPath = cfg.SubscriptionPath
+}
+
 func (s *Supervisor) Subscription(now time.Time) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -700,6 +710,12 @@ func (s *Supervisor) SubscriptionForClient(clientID string, now time.Time) (stri
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return subscriptionForClient(s.cfg, clientID, now)
+}
+
+func (s *Supervisor) SubscriptionPath() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.SubscriptionPath
 }
 
 func (s *Supervisor) State() State {
@@ -739,11 +755,12 @@ func (s *Supervisor) State() State {
 	sort.Strings(clientIDs)
 
 	out := State{
-		Name:         s.cfg.Name,
-		Port:         s.cfg.Port,
-		ClientCount:  len(clientIDs),
-		RunningCount: s.runningCountLocked(),
-		Clients:      make([]ClientState, 0, len(clientIDs)),
+		Name:             s.cfg.Name,
+		Port:             s.cfg.Port,
+		SubscriptionPath: s.cfg.SubscriptionPath,
+		ClientCount:      len(clientIDs),
+		RunningCount:     s.runningCountLocked(),
+		Clients:          make([]ClientState, 0, len(clientIDs)),
 	}
 	for _, id := range clientIDs {
 		quota := Quota{}
@@ -927,11 +944,12 @@ func (s *Supervisor) runningCountLocked() int {
 }
 
 type State struct {
-	Name         string        `json:"name"`
-	Port         int           `json:"port"`
-	ClientCount  int           `json:"client_count"`
-	RunningCount int           `json:"running_count"`
-	Clients      []ClientState `json:"clients"`
+	Name             string        `json:"name"`
+	Port             int           `json:"port"`
+	SubscriptionPath string        `json:"subscription_path"`
+	ClientCount      int           `json:"client_count"`
+	RunningCount     int           `json:"running_count"`
+	Clients          []ClientState `json:"clients"`
 }
 
 type ClientState struct {
@@ -1021,6 +1039,114 @@ type clientActionRequest struct {
 type generateRoomRequest struct {
 	Carrier string `json:"carrier"`
 	DNS     string `json:"dns"`
+}
+
+type settingsResponse struct {
+	Name                string `json:"name"`
+	Port                int    `json:"port"`
+	SubscriptionPath    string `json:"subscription_path"`
+	AdminUser           string `json:"admin_user"`
+	PortOverride        bool   `json:"port_override"`
+	RestartRequired     bool   `json:"restart_required,omitempty"`
+	SubscriptionBaseURL string `json:"subscription_base_url"`
+}
+
+type updateSettingsRequest struct {
+	Name             string `json:"name"`
+	Port             int    `json:"port"`
+	SubscriptionPath string `json:"subscription_path"`
+}
+
+func settingsHandler(configPath string, supervisor *Supervisor, portOverride bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			cfg, err := loadConfig(configPath)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, settingsFromConfig(r, configPath, cfg, portOverride, false))
+		case http.MethodPut:
+			var req updateSettingsRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			cfg, restartRequired, err := updateSettings(configPath, req)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			supervisor.UpdateSettings(cfg)
+			writeJSON(w, settingsFromConfig(r, configPath, cfg, portOverride, restartRequired))
+		default:
+			w.Header().Set("Allow", "GET, PUT")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func updateSettings(configPath string, req updateSettingsRequest) (Config, bool, error) {
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return Config{}, false, err
+	}
+	oldPort := cfg.Port
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		return Config{}, false, errors.New("name is required")
+	}
+	cfg.Name = req.Name
+	cfg.Port = req.Port
+	path, err := normalizeSubscriptionPath(req.SubscriptionPath)
+	if err != nil {
+		return Config{}, false, err
+	}
+	cfg.SubscriptionPath = path
+	cfg.Normalize()
+	if err := cfg.Validate(); err != nil {
+		return Config{}, false, err
+	}
+	if err := saveConfig(configPath, cfg); err != nil {
+		return Config{}, false, err
+	}
+	return cfg, cfg.Port != oldPort, nil
+}
+
+func settingsFromConfig(r *http.Request, configPath string, cfg Config, portOverride bool, restartRequired bool) settingsResponse {
+	return settingsResponse{
+		Name:                cfg.Name,
+		Port:                cfg.Port,
+		SubscriptionPath:    cfg.SubscriptionPath,
+		AdminUser:           currentAdminUser(configPath),
+		PortOverride:        portOverride,
+		RestartRequired:     restartRequired,
+		SubscriptionBaseURL: subscriptionBaseURL(r, cfg.SubscriptionPath),
+	}
+}
+
+func subscriptionBaseURL(r *http.Request, subscriptionPath string) string {
+	base := requestOrigin(r)
+	if subscriptionPath == "" {
+		return base + "/"
+	}
+	return base + "/" + subscriptionPath + "/"
+}
+
+func requestOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+		scheme = strings.Split(forwarded, ",")[0]
+	}
+	host := r.Host
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwarded != "" {
+		host = strings.Split(forwarded, ",")[0]
+	}
+	return scheme + "://" + strings.TrimSpace(host)
 }
 
 func addClientFromRequest(ctx context.Context, configPath, olcrtcPath string, r *http.Request) (string, error) {
@@ -2724,6 +2850,10 @@ func (c *Config) Normalize() {
 		c.Version = c.LegacyVersion
 	}
 
+	if path, err := normalizeSubscriptionPath(c.SubscriptionPath); err == nil {
+		c.SubscriptionPath = path
+	}
+
 	if len(c.Clients) == 0 {
 		return
 	}
@@ -2743,6 +2873,9 @@ func (c *Config) Normalize() {
 func (c Config) Validate() error {
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535, got %d", c.Port)
+	}
+	if _, err := normalizeSubscriptionPath(c.SubscriptionPath); err != nil {
+		return fmt.Errorf("subscription_path: %w", err)
 	}
 	for i, client := range c.Clients {
 		if err := validateQuota(client.Quota); err != nil {
@@ -2875,6 +3008,38 @@ func defaultString(value, fallback string) string {
 	return fallback
 }
 
+func normalizeSubscriptionPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return "", nil
+	}
+	if strings.Contains(path, "\\") || strings.Contains(path, "?") || strings.Contains(path, "#") {
+		return "", errors.New("must be a plain URL path without query or fragment")
+	}
+	parts := strings.Split(path, "/")
+	reserved := map[string]struct{}{
+		"-":      {},
+		"admin":  {},
+		"api":    {},
+		"assets": {},
+	}
+	for i, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return "", errors.New("must not contain empty, . or .. segments")
+		}
+		if strings.ContainsAny(part, " \t\r\n") {
+			return "", errors.New("must not contain whitespace")
+		}
+		if i == 0 {
+			if _, ok := reserved[part]; ok {
+				return "", fmt.Errorf("must not start with reserved segment %q", part)
+			}
+		}
+	}
+	return strings.Join(parts, "/"), nil
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -2884,7 +3049,7 @@ func min(a, b int) int {
 
 func subscriptionHandler(supervisor *Supervisor) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clientID, ok := clientIDFromPath(r.URL.Path)
+		clientID, ok := clientIDFromSubscriptionPath(r.URL.Path, supervisor.SubscriptionPath())
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -3309,6 +3474,21 @@ func clientIDFromPath(path string) (string, bool) {
 		return "", false
 	}
 	return clientID, true
+}
+
+func clientIDFromSubscriptionPath(path, subscriptionPath string) (string, bool) {
+	subscriptionPath, err := normalizeSubscriptionPath(subscriptionPath)
+	if err != nil {
+		return "", false
+	}
+	if subscriptionPath == "" {
+		return clientIDFromPath(path)
+	}
+	prefix := "/" + subscriptionPath + "/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", false
+	}
+	return clientIDFromPath(strings.TrimPrefix(path, "/"+subscriptionPath))
 }
 
 func subscription(cfg Config, now time.Time) string {
