@@ -379,12 +379,12 @@ func run() error {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/logs/"), "/")
-		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		clientID, roomID, transport := logRequestTarget(r)
+		if clientID == "" || roomID == "" || transport == "" {
 			http.NotFound(w, r)
 			return
 		}
-		lines, ok := supervisor.Logs(parts[0], parts[1], parts[2])
+		lines, ok := supervisor.Logs(clientID, roomID, transport)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -973,14 +973,15 @@ type LocationState struct {
 }
 
 type RuntimeState struct {
-	Status    string `json:"status"`
-	Running   bool   `json:"running"`
-	PID       int    `json:"pid,omitempty"`
-	StartedAt string `json:"started_at,omitempty"`
-	ExitedAt  string `json:"exited_at,omitempty"`
-	ExitError string `json:"exit_error,omitempty"`
-	LogCount  int    `json:"log_count"`
-	Restarts  int    `json:"restarts"`
+	Status      string `json:"status"`
+	Running     bool   `json:"running"`
+	PID         int    `json:"pid,omitempty"`
+	MemoryBytes uint64 `json:"memory_bytes,omitempty"`
+	StartedAt   string `json:"started_at,omitempty"`
+	ExitedAt    string `json:"exited_at,omitempty"`
+	ExitError   string `json:"exit_error,omitempty"`
+	LogCount    int    `json:"log_count"`
+	Restarts    int    `json:"restarts"`
 }
 
 type LogLine struct {
@@ -1132,6 +1133,20 @@ func subscriptionBaseURL(r *http.Request, subscriptionPath string) string {
 		return base + "/"
 	}
 	return base + "/" + subscriptionPath + "/"
+}
+
+func logRequestTarget(r *http.Request) (string, string, string) {
+	query := r.URL.Query()
+	if query.Has("client_id") || query.Has("room_id") || query.Has("transport") {
+		return strings.TrimSpace(query.Get("client_id")),
+			strings.TrimSpace(query.Get("room_id")),
+			strings.TrimSpace(query.Get("transport"))
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/logs/"), "/")
+	if len(parts) != 3 {
+		return "", "", ""
+	}
+	return parts[0], parts[1], parts[2]
 }
 
 func requestOrigin(r *http.Request) string {
@@ -1395,10 +1410,10 @@ func deleteClient(configPath, clientID string) error {
 	if !deleted {
 		return fmt.Errorf("client %q not found", clientID)
 	}
-	if len(next) == 0 {
-		return errors.New("cannot delete the last client")
-	}
 	cfg.Clients = next
+	if len(cfg.Clients) == 0 {
+		cfg.Locations = nil
+	}
 	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -1463,9 +1478,6 @@ func deleteLocation(configPath, clientID, roomID string) error {
 		}
 		if !deleted {
 			return fmt.Errorf("location %q not found", roomID)
-		}
-		if len(next) == 0 {
-			return errors.New("cannot delete the last location")
 		}
 		cfg.Clients[i].Locations = next
 		cfg.Normalize()
@@ -1941,8 +1953,37 @@ func (p *process) state() RuntimeState {
 	}
 	if p.cmd != nil && p.cmd.Process != nil && p.running {
 		state.PID = p.cmd.Process.Pid
+		state.MemoryBytes = processMemoryBytes(state.PID)
 	}
 	return state
+}
+
+func processMemoryBytes(pid int) uint64 {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
+	if err != nil {
+		return 0
+	}
+	return parseProcStatusMemoryBytes(data)
+}
+
+func parseProcStatusMemoryBytes(data []byte) uint64 {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "VmRSS:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return 0
+		}
+		kb, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return kb * 1024
+	}
+	return 0
 }
 
 func (p *process) markExited(err error) {
@@ -3012,7 +3053,7 @@ func normalizeSubscriptionPath(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	path = strings.Trim(path, "/")
 	if path == "" {
-		return "", nil
+		return "sub", nil
 	}
 	if strings.Contains(path, "\\") || strings.Contains(path, "?") || strings.Contains(path, "#") {
 		return "", errors.New("must be a plain URL path without query or fragment")
@@ -3552,13 +3593,12 @@ func subscriptionForLocations(name string, locations []Location, quota Quota, no
 
 func locationURI(loc Location) string {
 	payload := payloadString(loc.Transport.Payload)
-	return fmt.Sprintf("olcrtc://%s?%s%s@%s#%s%%%s$%s",
+	return fmt.Sprintf("olcrtc://%s?%s%s@%s#%s$%s",
 		loc.Carrier,
 		loc.Transport.Type,
 		payload,
 		loc.Endpoint.RoomID,
 		loc.Endpoint.Key,
-		loc.ClientID,
 		loc.Name,
 	)
 }

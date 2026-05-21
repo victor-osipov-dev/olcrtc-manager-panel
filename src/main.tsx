@@ -38,6 +38,7 @@ type RuntimeState = {
   status: string;
   running: boolean;
   pid?: number;
+  memory_bytes?: number;
   started_at?: string;
   exited_at?: string;
   exit_error?: string;
@@ -164,7 +165,7 @@ const defaultForm: ClientForm = {
 const defaultSettingsForm: SettingsForm = {
   name: "",
   port: "",
-  subscription_path: "",
+  subscription_path: "sub",
 };
 
 const payloadFields: Record<string, Array<{ key: string; label: string; defaultValue: string }>> = {
@@ -250,9 +251,18 @@ function formatBytes(bytes?: number) {
 }
 
 function subscriptionURL(clientID: string, subscriptionPath?: string) {
-  const path = subscriptionPath?.trim().replace(/^\/+|\/+$/g, "");
+  const path = subscriptionPath?.trim().replace(/^\/+|\/+$/g, "") || "sub";
   const prefix = path ? `/${path}` : "";
   return `${window.location.origin}${prefix}/${encodeURIComponent(clientID)}/`;
+}
+
+function logsURL(clientID: string, location: LocationState) {
+  const params = new URLSearchParams({
+    client_id: clientID,
+    room_id: location.room_id,
+    transport: location.transport,
+  });
+  return `/api/logs/?${params.toString()}`;
 }
 
 function cleanQuota(quota: Quota): Quota {
@@ -1206,12 +1216,7 @@ function App() {
     setLogs([]);
     setNotice("");
     try {
-      const res = await request(
-        `/api/logs/${encodeURIComponent(clientID)}/${encodeURIComponent(location.room_id)}/${encodeURIComponent(
-          location.transport,
-        )}`,
-        { cache: "no-store" },
-      );
+      const res = await request(logsURL(clientID, location), { cache: "no-store" });
       const body = (await res.json()) as { logs: LogLine[] };
       setLogs(body.logs ?? []);
       setLogTarget({ clientID, location });
@@ -1228,12 +1233,7 @@ function App() {
     const groups = await Promise.all(
       client.locations.map(async (location) => {
         try {
-          const res = await request(
-            `/api/logs/${encodeURIComponent(client.client_id)}/${encodeURIComponent(location.room_id)}/${encodeURIComponent(
-              location.transport,
-            )}`,
-            { cache: "no-store" },
-          );
+          const res = await request(logsURL(client.client_id, location), { cache: "no-store" });
           const body = (await res.json()) as { logs: LogLine[] };
           return { location, lines: body.logs ?? [] };
         } catch (err) {
@@ -1270,6 +1270,11 @@ function App() {
     return <LoginView setupRequired={setupRequired} onLogin={afterLogin} />;
   }
 
+  const serversMemoryBytes = metrics?.children.reduce(
+    (total, child) => total + (child.runtime.memory_bytes ?? 0),
+    0,
+  );
+
   return (
     <div className="min-h-screen">
       <header className="border-b border-border bg-background/95">
@@ -1279,6 +1284,7 @@ function App() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <HeaderMetric label="Panel mem" value={formatBytes(metrics?.memory.heap_alloc_bytes)} />
+            <HeaderMetric label="Servers mem" value={formatBytes(serversMemoryBytes)} />
             <HeaderMetric label="Panel PID" value={metrics?.manager.pid ?? "..."} />
             <button
               className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
@@ -1480,8 +1486,7 @@ function App() {
                                     </button>
                                     <button
                                       className="inline-flex h-8 items-center gap-2 rounded-md border border-destructive/40 px-2 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-60"
-                                      disabled={busy || client.locations.length <= 1}
-                                      title={client.locations.length <= 1 ? "Последнюю локацию удалить нельзя" : undefined}
+                                      disabled={busy}
                                       onClick={() => deleteLocation(client.client_id, loc)}
                                     >
                                       <Trash2 className="h-4 w-4" />
@@ -1668,12 +1673,8 @@ function App() {
                   className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
                   value={settingsForm.subscription_path}
                   onChange={(event) => setSettingsForm({ ...settingsForm, subscription_path: event.target.value })}
-                  placeholder="sub"
                 />
               </label>
-              <div className="break-all rounded-md border border-border bg-card p-3 font-mono text-xs text-muted-foreground">
-                {subscriptionURL("client-id", settingsForm.subscription_path)}
-              </div>
             </section>
 
             <div className="flex justify-end gap-2">
