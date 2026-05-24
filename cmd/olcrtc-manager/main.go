@@ -48,6 +48,7 @@ type Config struct {
 	Name             string     `json:"name"`
 	Port             int        `json:"port"`
 	SubscriptionPath string     `json:"subscription_path"`
+	Refresh          string     `json:"refresh,omitempty"`
 	ActiveLocationID string     `json:"active_location_id"`
 	Clients          []Client   `json:"clients"`
 	Locations        []Location `json:"locations"`
@@ -66,6 +67,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 
 type Client struct {
 	ClientID  string     `json:"client-id"`
+	Refresh   string     `json:"refresh,omitempty"`
 	Quota     Quota      `json:"quota,omitempty"`
 	Locations []Location `json:"locations"`
 }
@@ -698,6 +700,7 @@ func (s *Supervisor) UpdateSettings(cfg Config) {
 	s.cfg.Name = cfg.Name
 	s.cfg.Port = cfg.Port
 	s.cfg.SubscriptionPath = cfg.SubscriptionPath
+	s.cfg.Refresh = cfg.Refresh
 }
 
 func (s *Supervisor) Subscription(now time.Time) string {
@@ -758,20 +761,24 @@ func (s *Supervisor) State() State {
 		Name:             s.cfg.Name,
 		Port:             s.cfg.Port,
 		SubscriptionPath: s.cfg.SubscriptionPath,
+		Refresh:          s.cfg.Refresh,
 		ClientCount:      len(clientIDs),
 		RunningCount:     s.runningCountLocked(),
 		Clients:          make([]ClientState, 0, len(clientIDs)),
 	}
 	for _, id := range clientIDs {
 		quota := Quota{}
+		refresh := ""
 		for _, client := range s.cfg.Clients {
 			if client.ClientID == id {
 				quota = client.Quota
+				refresh = client.Refresh
 				break
 			}
 		}
 		out.Clients = append(out.Clients, ClientState{
 			ClientID:  id,
+			Refresh:   refresh,
 			Quota:     quota,
 			Locations: clients[id],
 		})
@@ -947,6 +954,7 @@ type State struct {
 	Name             string        `json:"name"`
 	Port             int           `json:"port"`
 	SubscriptionPath string        `json:"subscription_path"`
+	Refresh          string        `json:"refresh,omitempty"`
 	ClientCount      int           `json:"client_count"`
 	RunningCount     int           `json:"running_count"`
 	Clients          []ClientState `json:"clients"`
@@ -954,6 +962,7 @@ type State struct {
 
 type ClientState struct {
 	ClientID  string          `json:"client_id"`
+	Refresh   string          `json:"refresh,omitempty"`
 	Quota     Quota           `json:"quota"`
 	Locations []LocationState `json:"locations"`
 }
@@ -993,6 +1002,7 @@ type LogLine struct {
 type addClientRequest struct {
 	ClientID   string            `json:"client_id"`
 	FromClient string            `json:"from_client"`
+	Refresh    string            `json:"refresh"`
 	Quota      Quota             `json:"quota"`
 	Locations  []locationRequest `json:"locations"`
 	RoomID     string            `json:"room_id"`
@@ -1006,6 +1016,7 @@ type addClientRequest struct {
 
 type updateClientRequest struct {
 	ClientID  string            `json:"client_id"`
+	Refresh   string            `json:"refresh"`
 	Quota     Quota             `json:"quota"`
 	Locations []locationRequest `json:"locations"`
 	RoomID    string            `json:"room_id"`
@@ -1046,6 +1057,7 @@ type settingsResponse struct {
 	Name                string `json:"name"`
 	Port                int    `json:"port"`
 	SubscriptionPath    string `json:"subscription_path"`
+	Refresh             string `json:"refresh,omitempty"`
 	AdminUser           string `json:"admin_user"`
 	PortOverride        bool   `json:"port_override"`
 	RestartRequired     bool   `json:"restart_required,omitempty"`
@@ -1056,6 +1068,7 @@ type updateSettingsRequest struct {
 	Name             string `json:"name"`
 	Port             int    `json:"port"`
 	SubscriptionPath string `json:"subscription_path"`
+	Refresh          string `json:"refresh"`
 }
 
 func settingsHandler(configPath string, supervisor *Supervisor, portOverride bool) http.HandlerFunc {
@@ -1105,6 +1118,7 @@ func updateSettings(configPath string, req updateSettingsRequest) (Config, bool,
 		return Config{}, false, err
 	}
 	cfg.SubscriptionPath = path
+	cfg.Refresh = strings.TrimSpace(req.Refresh)
 	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, false, err
@@ -1120,6 +1134,7 @@ func settingsFromConfig(r *http.Request, configPath string, cfg Config, portOver
 		Name:                cfg.Name,
 		Port:                cfg.Port,
 		SubscriptionPath:    cfg.SubscriptionPath,
+		Refresh:             cfg.Refresh,
 		AdminUser:           currentAdminUser(configPath),
 		PortOverride:        portOverride,
 		RestartRequired:     restartRequired,
@@ -1173,6 +1188,7 @@ func addClientFromRequest(ctx context.Context, configPath, olcrtcPath string, r 
 	}
 	req.ClientID = strings.TrimSpace(req.ClientID)
 	req.FromClient = strings.TrimSpace(req.FromClient)
+	req.Refresh = strings.TrimSpace(req.Refresh)
 	req.Quota = normalizeQuota(req.Quota)
 	if req.ClientID == "" {
 		return "", errors.New("client_id is required")
@@ -1203,7 +1219,7 @@ func addClientFromRequest(ctx context.Context, configPath, olcrtcPath string, r 
 		locations[i].ClientID = req.ClientID
 	}
 
-	cfg.Clients = append(cfg.Clients, Client{ClientID: req.ClientID, Quota: req.Quota, Locations: locations})
+	cfg.Clients = append(cfg.Clients, Client{ClientID: req.ClientID, Refresh: req.Refresh, Quota: req.Quota, Locations: locations})
 	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return "", err
@@ -1222,6 +1238,7 @@ func updateClientFromRequest(ctx context.Context, configPath, olcrtcPath, client
 		return fmt.Errorf("parse request: %w", err)
 	}
 	req.ClientID = strings.TrimSpace(req.ClientID)
+	req.Refresh = strings.TrimSpace(req.Refresh)
 	req.Quota = normalizeQuota(req.Quota)
 	if err := validateQuota(req.Quota); err != nil {
 		return err
@@ -1264,6 +1281,7 @@ func updateClientFromRequest(ctx context.Context, configPath, olcrtcPath, client
 				cfg.Clients[i].Locations[j].ClientID = nextClientID
 			}
 		}
+		cfg.Clients[i].Refresh = req.Refresh
 		cfg.Clients[i].Quota = req.Quota
 		if locations != nil {
 			cfg.Clients[i].Locations = locations
@@ -2894,6 +2912,10 @@ func (c *Config) Normalize() {
 	if path, err := normalizeSubscriptionPath(c.SubscriptionPath); err == nil {
 		c.SubscriptionPath = path
 	}
+	c.Refresh = strings.TrimSpace(c.Refresh)
+	for i := range c.Clients {
+		c.Clients[i].Refresh = strings.TrimSpace(c.Clients[i].Refresh)
+	}
 
 	if len(c.Clients) == 0 {
 		return
@@ -2918,7 +2940,13 @@ func (c Config) Validate() error {
 	if _, err := normalizeSubscriptionPath(c.SubscriptionPath); err != nil {
 		return fmt.Errorf("subscription_path: %w", err)
 	}
+	if err := validateRefresh(c.Refresh); err != nil {
+		return fmt.Errorf("refresh: %w", err)
+	}
 	for i, client := range c.Clients {
+		if err := validateRefresh(client.Refresh); err != nil {
+			return fmt.Errorf("clients[%d].refresh: %w", i, err)
+		}
 		if err := validateQuota(client.Quota); err != nil {
 			return fmt.Errorf("clients[%d].quota: %w", i, err)
 		}
@@ -3079,6 +3107,33 @@ func normalizeSubscriptionPath(path string) (string, error) {
 		}
 	}
 	return strings.Join(parts, "/"), nil
+}
+
+func validateRefresh(refresh string) error {
+	if refresh == "" {
+		return nil
+	}
+	if len(refresh) < 2 {
+		return errors.New("must use intervals like 5s, 10m, 6h or 1d")
+	}
+	unit := refresh[len(refresh)-1]
+	if unit != 's' && unit != 'm' && unit != 'h' && unit != 'd' {
+		return errors.New("must end with s, m, h or d")
+	}
+	value := refresh[:len(refresh)-1]
+	if strings.HasPrefix(value, "0") {
+		return errors.New("must be greater than zero")
+	}
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return errors.New("must use intervals like 5s, 10m, 6h or 1d")
+		}
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n <= 0 {
+		return errors.New("must be greater than zero")
+	}
+	return nil
 }
 
 func min(a, b int) int {
@@ -3533,19 +3588,20 @@ func clientIDFromSubscriptionPath(path, subscriptionPath string) (string, bool) 
 }
 
 func subscription(cfg Config, now time.Time) string {
-	return subscriptionForLocations(cfg.Name, cfg.Locations, Quota{}, now)
+	return subscriptionForLocations(cfg.Name, cfg.Refresh, cfg.Locations, Quota{}, now)
 }
 
 func subscriptionForClient(cfg Config, clientID string, now time.Time) (string, bool) {
 	for _, client := range cfg.Clients {
 		if client.ClientID == clientID {
+			refresh := effectiveRefresh(cfg.Refresh, client.Refresh)
 			if len(client.Locations) == 0 {
 				return "", false
 			}
 			if quotaStatus(client.Quota, now) != "active" {
-				return subscriptionForLocations(cfg.Name, nil, client.Quota, now), true
+				return subscriptionForLocations(cfg.Name, refresh, nil, client.Quota, now), true
 			}
-			return subscriptionForLocations(cfg.Name, client.Locations, client.Quota, now), true
+			return subscriptionForLocations(cfg.Name, refresh, client.Locations, client.Quota, now), true
 		}
 	}
 	locations := make([]Location, 0)
@@ -3557,15 +3613,26 @@ func subscriptionForClient(cfg Config, clientID string, now time.Time) (string, 
 	if len(locations) == 0 {
 		return "", false
 	}
-	return subscriptionForLocations(cfg.Name, locations, Quota{}, now), true
+	return subscriptionForLocations(cfg.Name, cfg.Refresh, locations, Quota{}, now), true
 }
 
-func subscriptionForLocations(name string, locations []Location, quota Quota, now time.Time) string {
+func effectiveRefresh(globalRefresh, clientRefresh string) string {
+	if strings.TrimSpace(clientRefresh) != "" {
+		return strings.TrimSpace(clientRefresh)
+	}
+	return strings.TrimSpace(globalRefresh)
+}
+
+func subscriptionForLocations(name, refresh string, locations []Location, quota Quota, now time.Time) string {
 	var b bytes.Buffer
 	if name != "" {
 		fmt.Fprintf(&b, "#name: %s\n", name)
 	}
-	fmt.Fprintf(&b, "#update: %d\n\n", now.Unix())
+	fmt.Fprintf(&b, "#update: %d\n", now.Unix())
+	if refresh != "" {
+		fmt.Fprintf(&b, "#refresh: %s\n", refresh)
+	}
+	fmt.Fprintln(&b)
 	if quota.SpeedMbps > 0 {
 		fmt.Fprintf(&b, "#quota-speed-mbps: %d\n", quota.SpeedMbps)
 	}

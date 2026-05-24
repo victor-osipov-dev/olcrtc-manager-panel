@@ -59,6 +59,7 @@ type ClientLogGroup = {
 
 type ClientState = {
   client_id: string;
+  refresh?: string;
   quota: Quota;
   locations: LocationState[];
 };
@@ -84,6 +85,7 @@ type SettingsState = {
   name: string;
   port: number;
   subscription_path: string;
+  refresh?: string;
   admin_user: string;
   port_override: boolean;
   restart_required?: boolean;
@@ -128,6 +130,7 @@ type ClientLocationForm = {
 
 type ClientForm = {
   client_id: string;
+  refresh: string;
   quota: Quota;
   locations: ClientLocationForm[];
 };
@@ -136,6 +139,7 @@ type SettingsForm = {
   name: string;
   port: string;
   subscription_path: string;
+  refresh: string;
 };
 
 const carriers = ["jitsi", "wbstream", "telemost", "jazz"];
@@ -158,6 +162,7 @@ const defaultLocationForm: ClientLocationForm = {
 
 const defaultForm: ClientForm = {
   client_id: "",
+  refresh: "",
   quota: {},
   locations: [{ ...defaultLocationForm }],
 };
@@ -166,6 +171,7 @@ const defaultSettingsForm: SettingsForm = {
   name: "",
   port: "",
   subscription_path: "sub",
+  refresh: "",
 };
 
 const payloadFields: Record<string, Array<{ key: string; label: string; defaultValue: string }>> = {
@@ -275,6 +281,10 @@ function cleanQuota(quota: Quota): Quota {
   };
 }
 
+function cleanRefresh(refresh: string) {
+  return refresh.trim() || undefined;
+}
+
 function locationsForSubmit(locations: ClientLocationForm[]) {
   return locations.map((location) => ({
     name: location.name.trim(),
@@ -297,6 +307,12 @@ function quotaText(quota?: Quota) {
   }
   if (quota.expires_at) parts.push(`до ${quota.expires_at}`);
   return parts.length ? parts.join(" · ") : "none";
+}
+
+function clientSummary(client: ClientState, running: number) {
+  const parts = [`${client.locations.length} локац.`, `${running} running`, quotaText(client.quota)];
+  if (client.refresh) parts.push(`refresh ${client.refresh}`);
+  return parts.join(" · ");
 }
 
 function StatCard({
@@ -479,6 +495,15 @@ function ClientSettingsFields({
           </div>
         </label>
       )}
+      <label className="grid gap-2 text-sm text-muted-foreground">
+        Интервал обновления подписки
+        <input
+          className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+          value={form.refresh}
+          onChange={(event) => set({ refresh: event.target.value })}
+          placeholder="например 10m"
+        />
+      </label>
       <div className="grid gap-3 rounded-md border border-border bg-background p-3">
         <div className="text-sm font-medium text-foreground">Квоты клиента</div>
         <div className="grid gap-3 md:grid-cols-2">
@@ -706,6 +731,15 @@ function ClientFormFields({
           </div>
         </label>
       )}
+      <label className="grid gap-2 text-sm text-muted-foreground">
+        Интервал обновления подписки
+        <input
+          className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+          value={form.refresh}
+          onChange={(event) => set({ refresh: event.target.value })}
+          placeholder="например 10m"
+        />
+      </label>
       <div className="grid gap-3 rounded-md border border-border bg-background p-3">
         <div className="text-sm font-medium text-foreground">Квоты клиента</div>
         <div className="grid gap-3 md:grid-cols-2">
@@ -959,6 +993,7 @@ function App() {
       name: body.name,
       port: String(body.port),
       subscription_path: body.subscription_path,
+      refresh: body.refresh ?? "",
     });
   };
 
@@ -1020,6 +1055,7 @@ function App() {
     setEditForm(
       normalizeForm({
         client_id: client.client_id,
+        refresh: client.refresh ?? "",
         quota: client.quota ?? {},
         locations: [{ ...defaultLocationForm }],
       }),
@@ -1064,6 +1100,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           client_id: createForm.client_id.trim(),
+          refresh: cleanRefresh(createForm.refresh),
           quota: cleanQuota(createForm.quota),
           locations: locationsForSubmit(createForm.locations),
         }),
@@ -1080,6 +1117,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           client_id: editForm.client_id.trim(),
+          refresh: cleanRefresh(editForm.refresh),
           quota: cleanQuota(editForm.quota),
         }),
       });
@@ -1121,6 +1159,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           client_id: editLocation.client.client_id,
+          refresh: cleanRefresh(editLocation.client.refresh ?? ""),
           quota: cleanQuota(editLocation.client.quota),
           locations: locationsForSubmit(nextLocations),
         }),
@@ -1189,6 +1228,7 @@ function App() {
           name: settingsForm.name.trim(),
           port,
           subscription_path: settingsForm.subscription_path.trim(),
+          refresh: cleanRefresh(settingsForm.refresh),
         }),
       });
       const body = (await res.json()) as SettingsState;
@@ -1197,6 +1237,7 @@ function App() {
         name: body.name,
         port: String(body.port),
         subscription_path: body.subscription_path,
+        refresh: body.refresh ?? "",
       });
       await loadState();
       await loadAudit();
@@ -1360,7 +1401,7 @@ function App() {
                       <span className="min-w-0">
                         <span className="block truncate font-semibold">{client.client_id}</span>
                         <span className="mt-1 block text-xs text-muted-foreground">
-                          {client.locations.length} локац. · {running} running · {quotaText(client.quota)}
+                          {clientSummary(client, running)}
                         </span>
                       </span>
                     </button>
@@ -1673,6 +1714,15 @@ function App() {
                   className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
                   value={settingsForm.subscription_path}
                   onChange={(event) => setSettingsForm({ ...settingsForm, subscription_path: event.target.value })}
+                />
+              </label>
+              <label className="grid gap-2 text-sm text-muted-foreground">
+                Интервал обновления
+                <input
+                  className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                  value={settingsForm.refresh}
+                  onChange={(event) => setSettingsForm({ ...settingsForm, refresh: event.target.value })}
+                  placeholder="например 10m"
                 />
               </label>
             </section>

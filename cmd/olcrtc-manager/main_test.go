@@ -171,6 +171,45 @@ func TestSubscriptionForClientIncludesQuotaMetadata(t *testing.T) {
 	}
 }
 
+func TestSubscriptionIncludesGlobalRefresh(t *testing.T) {
+	cfg := testConfig(testLocation("room-01", "Netherlands"))
+	cfg.Refresh = "10m"
+
+	got := subscription(cfg, time.Unix(1778011200, 0))
+
+	if !strings.Contains(got, "#refresh: 10m") {
+		t.Fatalf("subscription missing global refresh:\n%s", got)
+	}
+}
+
+func TestSubscriptionForClientRefreshOverridesGlobal(t *testing.T) {
+	loc := testLocation("room-01", "Netherlands")
+	cfg := Config{
+		Name:    "ScumVPN",
+		Port:    8888,
+		Refresh: "10m",
+		Clients: []Client{
+			{
+				ClientID:  "user",
+				Refresh:   "1m",
+				Locations: []Location{loc},
+			},
+		},
+		Locations: []Location{loc},
+	}
+
+	got, ok := subscriptionForClient(cfg, "user", time.Unix(1778011200, 0))
+	if !ok {
+		t.Fatal("subscriptionForClient returned ok=false")
+	}
+	if !strings.Contains(got, "#refresh: 1m") {
+		t.Fatalf("subscription missing client refresh:\n%s", got)
+	}
+	if strings.Contains(got, "#refresh: 10m") {
+		t.Fatalf("subscription used global refresh despite client override:\n%s", got)
+	}
+}
+
 func TestSubscriptionForClientRejectsUnknownClient(t *testing.T) {
 	cfg := testConfig(testLocation("room-01", "Netherlands"))
 
@@ -265,6 +304,7 @@ func TestUpdateSettingsNormalizesSubscriptionPath(t *testing.T) {
 		Name:             "New",
 		Port:             9443,
 		SubscriptionPath: "/subscription/",
+		Refresh:          "10m",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +312,7 @@ func TestUpdateSettingsNormalizesSubscriptionPath(t *testing.T) {
 	if !restartRequired {
 		t.Fatal("restartRequired = false, want true")
 	}
-	if cfg.Name != "New" || cfg.Port != 9443 || cfg.SubscriptionPath != "subscription" {
+	if cfg.Name != "New" || cfg.Port != 9443 || cfg.SubscriptionPath != "subscription" || cfg.Refresh != "10m" {
 		t.Fatalf("settings = %#v", cfg)
 	}
 }
@@ -282,6 +322,20 @@ func TestConfigDefaultsSubscriptionPathToSub(t *testing.T) {
 	cfg.Normalize()
 	if cfg.SubscriptionPath != "sub" {
 		t.Fatalf("SubscriptionPath = %q, want sub", cfg.SubscriptionPath)
+	}
+}
+
+func TestConfigValidatesRefreshIntervals(t *testing.T) {
+	for _, refresh := range []string{"5s", "10m", "6h", "1d"} {
+		cfg := Config{Name: "ScumVPN", Port: 8888, Refresh: refresh}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate(%q) = %v, want nil", refresh, err)
+		}
+	}
+
+	cfg := Config{Name: "ScumVPN", Port: 8888, Refresh: "10w"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for invalid refresh")
 	}
 }
 
