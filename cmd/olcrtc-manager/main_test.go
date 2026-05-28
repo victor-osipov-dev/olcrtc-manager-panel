@@ -88,6 +88,25 @@ func TestServerConfigMapsPayloadToYAMLSections(t *testing.T) {
 	}
 }
 
+func TestServerConfigMapsUpstreamProxyAuth(t *testing.T) {
+	loc := testLocation("room-01", "Proxy")
+	loc.Proxy = Socks5Proxy{
+		Addr: "127.0.0.1",
+		Port: 1080,
+		User: "proxy-user",
+		Pass: "proxy-pass",
+	}
+
+	got, err := serverConfig(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SOCKS.ProxyAddr != "127.0.0.1" || got.SOCKS.ProxyPort != 1080 ||
+		got.SOCKS.ProxyUser != "proxy-user" || got.SOCKS.ProxyPass != "proxy-pass" {
+		t.Fatalf("socks proxy config = %#v", got.SOCKS)
+	}
+}
+
 func TestServerConfigAllowsVideoAutoQRSize(t *testing.T) {
 	loc := testLocation("room-01", "Video")
 	loc.Transport = Transport{
@@ -443,6 +462,16 @@ func TestConfigRejectsAnyRoomID(t *testing.T) {
 
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected validation error for room_id=any")
+	}
+}
+
+func TestConfigRejectsIncompleteProxy(t *testing.T) {
+	loc := testLocation("room-01", "Proxy")
+	loc.Proxy = Socks5Proxy{Port: 1080}
+	cfg := testConfig(loc)
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for proxy without address")
 	}
 }
 

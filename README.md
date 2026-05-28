@@ -30,7 +30,7 @@ systemctl
 Файлы времени выполнения, ожидаемые стандартным systemd unit:
 
 - `/usr/local/bin/olcrtc-manager`
-- `/usr/local/bin/olcrtc`, собранный из ветки `refactor/universal-carrier` репозитория `openlibrecommunity/olcrtc`
+- `/usr/local/bin/olcrtc`, собранный из ветки `master` репозитория `openlibrecommunity/olcrtc`
 - `/etc/olcrtc-manager/config.json`
 - необязательный `/etc/olcrtc-manager/panel.env`
 
@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/BigDaddy3334/olcrtc-manager-panel/m
 
 - устанавливает необходимые пакеты;
 - устанавливает Go, если системный Go отсутствует или слишком старый;
-- собирает и устанавливает `olcrtc` из ветки `refactor/universal-carrier`;
+- собирает и устанавливает `olcrtc` из ветки `master`;
 - собирает и устанавливает `olcrtc-manager`;
 - создает `/etc/olcrtc-manager/config.json` без начальных комнат, если файл еще не существует;
 - сохраняет существующие `config` и `panel.env`;
@@ -187,7 +187,7 @@ https://example.com:9443/admin
         {
           "name": "Current VPS",
           "endpoint": {
-            "room_id": "https://meet.example.org/room",
+            "room_id": "https://meet1.arbitr.ru/room",
             "key": "e830d36f7be8cfb04a741fc1a5e2ddf8ff04f30985dc070616483f939ad5fafe"
           },
           "carrier": "jitsi",
@@ -196,7 +196,13 @@ https://example.com:9443/admin
           },
           "link": "direct",
           "data": "data",
-          "dns": "1.1.1.1:53"
+          "dns": "1.1.1.1:53",
+          "proxy": {
+            "addr": "127.0.0.1",
+            "port": 1080,
+            "user": "optional-user",
+            "pass": "optional-password"
+          }
         }
       ]
     }
@@ -222,7 +228,9 @@ https://example.com:9443/admin
 
 Конфигурация менеджера остается JSON-файлом для данных панели, квот и подписок. Для каждой запущенной локации менеджер записывает временную runtime-конфигурацию `olcrtc` в YAML и запускает `olcrtc <config.yaml>`.
 
-`carrier` сопоставляется с новым полем `auth.provider` в `olcrtc`. Поддерживаемые провайдеры: `jitsi`, `wbstream`, `telemost` и `jazz`. Для `jitsi` значение `endpoint.room_id` — это полный URL комнаты, например `https://meet.example.org/room`. Для остальных провайдеров это ID комнаты провайдера. Значение `any` отклоняется.
+`carrier` сопоставляется с новым полем `auth.provider` в `olcrtc`. Поддерживаемые провайдеры: `jitsi`, `wbstream`, `telemost` и `jazz`. Для `jitsi` значение `endpoint.room_id` — это полный URL комнаты, например `https://meet1.arbitr.ru/room`. Для остальных провайдеров это ID комнаты провайдера. Значение `any` отклоняется.
+
+`proxy` необязателен. Если он задан, менеджер пробрасывает его в runtime YAML как `socks.proxy_addr`, `socks.proxy_port`, `socks.proxy_user` и `socks.proxy_pass`. Это upstream SOCKS5-прокси, через который серверная сторона `olcrtc` будет открывать исходящие подключения; `user`/`pass` используются для RFC 1929-аутентификации.
 
 ## Сетевая изоляция и лимиты
 

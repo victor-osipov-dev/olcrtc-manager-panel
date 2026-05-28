@@ -14,6 +14,10 @@ Options:
   --carrier CARRIER        Provider for a generated default location (default: wbstream).
   --transport TRANSPORT    Transport for a generated default location (default: vp8channel).
   --dns DNS                DNS for a generated default location (default: 1.1.1.1:53).
+  --proxy-addr ADDR        Upstream SOCKS5 proxy host for the server side.
+  --proxy-port PORT        Upstream SOCKS5 proxy port.
+  --proxy-user USER        Optional upstream SOCKS5 username.
+  --proxy-pass PASS        Optional upstream SOCKS5 password.
   --reload URL             POST URL after saving, for example http://127.0.0.1:8888/-/reload.
   -h, --help               Show this help.
 
@@ -62,6 +66,10 @@ room_id=
 carrier="wbstream"
 transport="vp8channel"
 dns="1.1.1.1:53"
+proxy_addr=
+proxy_port=
+proxy_user=
+proxy_pass=
 reload_url=
 
 while [ "$#" -gt 0 ]; do
@@ -101,6 +109,26 @@ while [ "$#" -gt 0 ]; do
 			dns=$2
 			shift 2
 			;;
+		--proxy-addr)
+			[ "$#" -ge 2 ] || die "--proxy-addr requires ADDR"
+			proxy_addr=$2
+			shift 2
+			;;
+		--proxy-port)
+			[ "$#" -ge 2 ] || die "--proxy-port requires PORT"
+			proxy_port=$2
+			shift 2
+			;;
+		--proxy-user)
+			[ "$#" -ge 2 ] || die "--proxy-user requires USER"
+			proxy_user=$2
+			shift 2
+			;;
+		--proxy-pass)
+			[ "$#" -ge 2 ] || die "--proxy-pass requires PASS"
+			proxy_pass=$2
+			shift 2
+			;;
 		--reload)
 			[ "$#" -ge 2 ] || die "--reload requires URL"
 			reload_url=$2
@@ -129,7 +157,7 @@ fi
 tmp=$(mktemp "${config}.tmp.XXXXXX")
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
-python3 - "$config" "$tmp" "$client_id" "$from_client" "$key" "$location_name" "$room_id" "$carrier" "$transport" "$dns" "${OLCRTC_PATH:-}" <<'PY'
+python3 - "$config" "$tmp" "$client_id" "$from_client" "$key" "$location_name" "$room_id" "$carrier" "$transport" "$dns" "$proxy_addr" "$proxy_port" "$proxy_user" "$proxy_pass" "${OLCRTC_PATH:-}" <<'PY'
 import copy
 import json
 import os
@@ -137,7 +165,7 @@ import subprocess
 import sys
 import tempfile
 
-config_path, tmp_path, client_id, from_client, key, location_name, room_id, carrier, transport, dns, olcrtc_path = sys.argv[1:]
+config_path, tmp_path, client_id, from_client, key, location_name, room_id, carrier, transport, dns, proxy_addr, proxy_port, proxy_user, proxy_pass, olcrtc_path = sys.argv[1:]
 
 with open(config_path, "r", encoding="utf-8") as f:
     cfg = json.load(f)
@@ -193,7 +221,7 @@ if from_client:
         endpoint["room_id"] = new_room_id(loc.get("carrier", carrier), loc.get("dns", dns))
         endpoint["key"] = new_key()
 else:
-    locations = [{
+    location = {
         "name": location_name,
         "endpoint": {
             "room_id": room_id or new_room_id(carrier, dns),
@@ -206,7 +234,15 @@ else:
         "link": "direct",
         "data": "data",
         "dns": dns,
-    }]
+    }
+    if proxy_addr or proxy_port or proxy_user or proxy_pass:
+        location["proxy"] = {
+            "addr": proxy_addr,
+            "port": int(proxy_port or "0"),
+            "user": proxy_user,
+            "pass": proxy_pass,
+        }
+    locations = [location]
 
 if clients is None:
     for loc in locations:

@@ -14,6 +14,11 @@ Options:
   --carrier CARRIER        Set carrier for all client locations.
   --transport TRANSPORT    Set transport.type for all client locations and clear payload.
   --dns DNS                Set dns for all client locations.
+  --proxy-addr ADDR        Set upstream SOCKS5 proxy host for all client locations.
+  --proxy-port PORT        Set upstream SOCKS5 proxy port.
+  --proxy-user USER        Set upstream SOCKS5 username.
+  --proxy-pass PASS        Set upstream SOCKS5 password.
+  --clear-proxy            Remove upstream SOCKS5 proxy settings.
   --reload URL             POST URL after saving, for example http://127.0.0.1:8888/-/reload.
   -h, --help               Show this help.
 USAGE
@@ -49,6 +54,11 @@ room_prefix=
 carrier=
 transport=
 dns=
+proxy_addr=
+proxy_port=
+proxy_user=
+proxy_pass=
+clear_proxy=0
 reload_url=
 
 while [ "$#" -gt 0 ]; do
@@ -88,6 +98,30 @@ while [ "$#" -gt 0 ]; do
 			dns=$2
 			shift 2
 			;;
+		--proxy-addr)
+			[ "$#" -ge 2 ] || die "--proxy-addr requires ADDR"
+			proxy_addr=$2
+			shift 2
+			;;
+		--proxy-port)
+			[ "$#" -ge 2 ] || die "--proxy-port requires PORT"
+			proxy_port=$2
+			shift 2
+			;;
+		--proxy-user)
+			[ "$#" -ge 2 ] || die "--proxy-user requires USER"
+			proxy_user=$2
+			shift 2
+			;;
+		--proxy-pass)
+			[ "$#" -ge 2 ] || die "--proxy-pass requires PASS"
+			proxy_pass=$2
+			shift 2
+			;;
+		--clear-proxy)
+			clear_proxy=1
+			shift
+			;;
 		--reload)
 			[ "$#" -ge 2 ] || die "--reload requires URL"
 			reload_url=$2
@@ -105,18 +139,18 @@ done
 
 [ -f "$config" ] || die "config does not exist: $config"
 
-if [ -z "$new_id$location_name$key$room_prefix$carrier$transport$dns" ]; then
+if [ -z "$new_id$location_name$key$room_prefix$carrier$transport$dns$proxy_addr$proxy_port$proxy_user$proxy_pass" ] && [ "$clear_proxy" -eq 0 ]; then
 	die "nothing to change"
 fi
 
 tmp=$(mktemp "${config}.tmp.XXXXXX")
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
-python3 - "$config" "$tmp" "$client_id" "$new_id" "$location_name" "$key" "$room_prefix" "$carrier" "$transport" "$dns" <<'PY'
+python3 - "$config" "$tmp" "$client_id" "$new_id" "$location_name" "$key" "$room_prefix" "$carrier" "$transport" "$dns" "$proxy_addr" "$proxy_port" "$proxy_user" "$proxy_pass" "$clear_proxy" <<'PY'
 import json
 import sys
 
-config_path, tmp_path, client_id, new_id, location_name, key, room_prefix, carrier, transport, dns = sys.argv[1:]
+config_path, tmp_path, client_id, new_id, location_name, key, room_prefix, carrier, transport, dns, proxy_addr, proxy_port, proxy_user, proxy_pass, clear_proxy = sys.argv[1:]
 
 with open(config_path, "r", encoding="utf-8") as f:
     cfg = json.load(f)
@@ -137,6 +171,18 @@ def update_locations(locations, set_client_id=False):
             loc["transport"] = {"type": transport}
         if dns:
             loc["dns"] = dns
+        if clear_proxy == "1":
+            loc.pop("proxy", None)
+        elif proxy_addr or proxy_port or proxy_user or proxy_pass:
+            proxy = loc.setdefault("proxy", {})
+            if proxy_addr:
+                proxy["addr"] = proxy_addr
+            if proxy_port:
+                proxy["port"] = int(proxy_port)
+            if proxy_user:
+                proxy["user"] = proxy_user
+            if proxy_pass:
+                proxy["pass"] = proxy_pass
 
 clients = cfg.get("clients")
 if clients is None:
