@@ -24,6 +24,11 @@ PANEL_REF="${PANEL_REF:-main}"
 OLCRTC_REPO="${OLCRTC_REPO:-https://github.com/openlibrecommunity/olcrtc.git}"
 OLCRTC_REF="${OLCRTC_REF:-master}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
+MIN_BUILD_MEMORY_MB="${MIN_BUILD_MEMORY_MB:-2048}"
+AUTO_SWAP="${AUTO_SWAP:-1}"
+BUILD_SWAP_FILE="${BUILD_SWAP_FILE:-/swapfile}"
+BUILD_SWAP_SIZE="${BUILD_SWAP_SIZE:-2G}"
+GO_BUILD_P="${GO_BUILD_P:-}"
 PANEL_ADDR="${PANEL_ADDR:-127.0.0.1}"
 PANEL_PORT="${PANEL_PORT:-$(random_port)}"
 PANEL_ADMIN_PATH="${PANEL_ADMIN_PATH:-${OLCRTC_MANAGER_ADMIN_PATH:-/admin-$(random_hex 4)}}"
@@ -65,6 +70,50 @@ need_root() {
 	if [ "$(id -u)" -ne 0 ]; then
 		die "run as root: curl -fsSL .../scripts/install.sh | sudo bash"
 	fi
+}
+
+meminfo_mb() {
+	local key="$1"
+	awk -v key="$key" '$1 == key ":" {print int($2 / 1024); found=1} END {if (!found) print 0}' /proc/meminfo 2>/dev/null || printf '0\n'
+}
+
+ensure_build_memory() {
+	local mem swap total
+	mem="$(meminfo_mb MemTotal)"
+	swap="$(meminfo_mb SwapTotal)"
+	total=$((mem + swap))
+	log "memory: RAM=${mem}MB swap=${swap}MB total=${total}MB"
+
+	if [ -z "$GO_BUILD_P" ] && [ "$total" -lt 3072 ]; then
+		GO_BUILD_P=1
+		log "low-memory build mode enabled: go build -p 1"
+	fi
+
+	if [ "$total" -ge "$MIN_BUILD_MEMORY_MB" ]; then
+		return
+	fi
+
+	if [ "$AUTO_SWAP" != "1" ]; then
+		log "warning: less than ${MIN_BUILD_MEMORY_MB}MB RAM+swap; Go build may be very slow or fail with OOM"
+		log "add swap or rerun with AUTO_SWAP=1"
+		return
+	fi
+
+	if [ "$swap" -gt 0 ]; then
+		log "warning: less than ${MIN_BUILD_MEMORY_MB}MB RAM+swap even with existing swap; build may be slow"
+		return
+	fi
+
+	log "creating temporary build swap: ${BUILD_SWAP_FILE} (${BUILD_SWAP_SIZE})"
+	if [ -e "$BUILD_SWAP_FILE" ]; then
+		log "swap file exists; not overwriting: $BUILD_SWAP_FILE"
+		return
+	fi
+	fallocate -l "$BUILD_SWAP_SIZE" "$BUILD_SWAP_FILE" || dd if=/dev/zero of="$BUILD_SWAP_FILE" bs=1M count=2048 status=progress
+	chmod 600 "$BUILD_SWAP_FILE"
+	mkswap "$BUILD_SWAP_FILE" >/dev/null
+	swapon "$BUILD_SWAP_FILE"
+	log "swap enabled for build"
 }
 
 install_packages() {
@@ -121,7 +170,11 @@ clone_repo() {
 build_olcrtc() {
 	local src="$1"
 	log "building olcrtc"
-	(cd "$src" && CGO_ENABLED=0 go build -o /tmp/olcrtc ./cmd/olcrtc)
+	if [ -n "$GO_BUILD_P" ]; then
+		(cd "$src" && CGO_ENABLED=0 go build -p "$GO_BUILD_P" -o /tmp/olcrtc ./cmd/olcrtc)
+	else
+		(cd "$src" && CGO_ENABLED=0 go build -o /tmp/olcrtc ./cmd/olcrtc)
+	fi
 	install -m 0755 /tmp/olcrtc /usr/local/bin/olcrtc
 }
 
@@ -131,7 +184,11 @@ build_manager() {
 	if [ ! -f "$src/cmd/olcrtc-manager/web/dist/index.html" ]; then
 		die "frontend bundle is missing in repository; build assets before publishing installer"
 	fi
-	(cd "$src" && CGO_ENABLED=0 go build -o /tmp/olcrtc-manager ./cmd/olcrtc-manager)
+	if [ -n "$GO_BUILD_P" ]; then
+		(cd "$src" && CGO_ENABLED=0 go build -p "$GO_BUILD_P" -o /tmp/olcrtc-manager ./cmd/olcrtc-manager)
+	else
+		(cd "$src" && CGO_ENABLED=0 go build -o /tmp/olcrtc-manager ./cmd/olcrtc-manager)
+	fi
 	install -m 0755 /tmp/olcrtc-manager /usr/local/bin/olcrtc-manager
 }
 
@@ -290,6 +347,7 @@ main() {
 	need_root
 	install_packages
 	install_go
+	ensure_build_memory
 
 	local work panel_src olcrtc_src
 	work="$(mktemp -d /tmp/olcrtc-manager-install.XXXXXX)"
