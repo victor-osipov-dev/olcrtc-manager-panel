@@ -331,6 +331,31 @@ function proxyFromState(proxy?: Partial<Socks5Proxy> & { port?: string | number 
   };
 }
 
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("copy command failed");
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 function quotaText(quota?: Quota) {
   if (!quota) return "none";
   const parts = [];
@@ -1411,20 +1436,18 @@ function App() {
 
   const copyLogs = () =>
     runAction(async () => {
-      await navigator.clipboard.writeText(
-        logs.map((line) => `[${line.time}] ${line.stream}: ${line.line}`).join("\n"),
-      );
+      await copyText(logs.map((line) => `[${line.time}] ${line.stream}: ${line.line}`).join("\n"));
     }, "Логи скопированы");
 
   const copyOlcBoxLink = (clientID: string, uri: string) =>
     runAction(async () => {
       if (!uri) throw new Error("OlcBox ссылка не найдена");
-      await navigator.clipboard.writeText(uri);
+      await copyText(uri);
     }, `Ссылка для ${clientID} скопирована`);
 
   const copySubscription = (clientID: string) =>
     runAction(async () => {
-      await navigator.clipboard.writeText(subscriptionURL(clientID, currentSubscriptionPath));
+      await copyText(subscriptionURL(clientID, currentSubscriptionPath));
     }, `Subscription для ${clientID} скопирован`);
 
   if (authenticated === null) {
