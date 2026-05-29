@@ -465,6 +465,16 @@ func TestConfigRejectsAnyRoomID(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsUnsupportedCarrier(t *testing.T) {
+	loc := testLocation("room-01", "Unsupported")
+	loc.Carrier = "jazz"
+	cfg := testConfig(loc)
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for unsupported carrier")
+	}
+}
+
 func TestConfigRejectsIncompleteProxy(t *testing.T) {
 	loc := testLocation("room-01", "Proxy")
 	loc.Proxy = Socks5Proxy{Port: 1080}

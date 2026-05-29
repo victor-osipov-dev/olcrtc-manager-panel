@@ -151,12 +151,11 @@ type SettingsForm = {
   refresh: string;
 };
 
-const carriers = ["jitsi", "wbstream", "telemost", "jazz"];
+const carriers = ["jitsi", "wbstream", "telemost"];
 const transportsByCarrier: Record<string, string[]> = {
   jitsi: ["datachannel", "vp8channel", "seichannel", "videochannel"],
   wbstream: ["vp8channel", "seichannel", "videochannel", "datachannel"],
   telemost: ["vp8channel", "videochannel"],
-  jazz: ["datachannel"],
 };
 
 const defaultLocationForm: ClientLocationForm = {

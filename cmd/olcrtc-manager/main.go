@@ -3070,12 +3070,6 @@ func isSupported(carrier, transport string) bool {
 			"seichannel":   false,
 			"videochannel": true,
 		},
-		"jazz": {
-			"datachannel":  true,
-			"vp8channel":   false,
-			"seichannel":   false,
-			"videochannel": false,
-		},
 		"wbstream": {
 			"datachannel":  true,
 			"vp8channel":   true,
