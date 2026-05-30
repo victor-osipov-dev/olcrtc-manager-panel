@@ -154,7 +154,7 @@ type SettingsForm = {
 const carriers = ["jitsi", "wbstream", "telemost"];
 const transportsByCarrier: Record<string, string[]> = {
   jitsi: ["datachannel", "vp8channel", "seichannel", "videochannel"],
-  wbstream: ["vp8channel", "seichannel", "videochannel", "datachannel"],
+  wbstream: ["vp8channel", "seichannel", "videochannel"],
   telemost: ["vp8channel", "videochannel"],
 };
 
