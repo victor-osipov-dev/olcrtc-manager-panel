@@ -122,6 +122,7 @@ type AuditEvent = {
 type ClientLocationForm = {
   name: string;
   room_id: string;
+  jitsi_instance: string;
   key: string;
   carrier: string;
   transport: string;
@@ -151,6 +152,23 @@ type SettingsForm = {
   refresh: string;
 };
 
+const DEFAULT_JITSI_INSTANCE = "https://meet.jit.si";
+
+function splitJitsiRoomId(roomId: string): { instance: string; room: string } {
+  const trimmed = roomId.trim();
+  const lastSlash = trimmed.lastIndexOf("/");
+  if (lastSlash > 0) {
+    return { instance: trimmed.slice(0, lastSlash), room: trimmed.slice(lastSlash + 1) };
+  }
+  return { instance: DEFAULT_JITSI_INSTANCE, room: trimmed };
+}
+
+function combineJitsiRoomId(instance: string, room: string): string {
+  const base = instance.trim().replace(/\/+$/, "");
+  const r = room.trim();
+  return base ? `${base}/${r}` : r;
+}
+
 const carriers = ["jitsi", "wbstream", "telemost"];
 const transportsByCarrier: Record<string, string[]> = {
   jitsi: ["datachannel", "vp8channel", "seichannel", "videochannel"],
@@ -161,6 +179,7 @@ const transportsByCarrier: Record<string, string[]> = {
 const defaultLocationForm: ClientLocationForm = {
   name: "",
   room_id: "",
+  jitsi_instance: DEFAULT_JITSI_INSTANCE,
   key: "",
   carrier: "jitsi",
   transport: "datachannel",
@@ -298,7 +317,9 @@ function cleanRefresh(refresh: string) {
 function locationsForSubmit(locations: ClientLocationForm[]) {
   return locations.map((location) => ({
     name: location.name.trim(),
-    room_id: location.room_id.trim(),
+    room_id: location.carrier === "jitsi"
+      ? combineJitsiRoomId(location.jitsi_instance, location.room_id)
+      : location.room_id.trim(),
     key: location.key.trim(),
     carrier: location.carrier,
     transport: location.transport,
@@ -665,15 +686,47 @@ function LocationFormFields({
           </select>
         </label>
       </div>
-      <label className="grid gap-2 text-sm text-muted-foreground">
-        Room ID
-        <input
-          className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
-          value={location.room_id}
-          onChange={(event) => set({ room_id: event.target.value })}
-          placeholder={roomPlaceholder(location.carrier)}
-        />
-      </label>
+      {location.carrier === "jitsi" ? (
+        <>
+          <label className="grid gap-2 text-sm text-muted-foreground">
+            Jitsi Server
+            <input
+              className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+              value={location.jitsi_instance}
+              onChange={(event) => set({ jitsi_instance: event.target.value })}
+              placeholder="https://meet.jit.si"
+            />
+          </label>
+          <label className="grid gap-2 text-sm text-muted-foreground">
+            Room ID
+            <div className="flex gap-2">
+              <input
+                className="h-10 flex-1 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+                value={location.room_id}
+                onChange={(event) => set({ room_id: event.target.value })}
+                placeholder="MyRoom"
+              />
+              <button
+                className="inline-flex h-10 items-center rounded-md border border-primary bg-secondary px-3 text-xs font-medium text-primary hover:bg-primary/10"
+                type="button"
+                onClick={() => set({ room_id: crypto.randomUUID() })}
+              >
+                Generate
+              </button>
+            </div>
+          </label>
+        </>
+      ) : (
+        <label className="grid gap-2 text-sm text-muted-foreground">
+          Room ID
+          <input
+            className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
+            value={location.room_id}
+            onChange={(event) => set({ room_id: event.target.value })}
+            placeholder={roomPlaceholder(location.carrier)}
+          />
+        </label>
+      )}
       <label className="grid gap-2 text-sm text-muted-foreground">
         Key
         <div className="flex gap-2">
@@ -946,15 +999,47 @@ function ClientFormFields({
                 </select>
               </label>
             </div>
-            <label className="grid gap-2 text-sm text-muted-foreground">
-              Room ID
-              <input
-                className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
-                value={location.room_id}
-                onChange={(event) => setLocation(index, { room_id: event.target.value })}
-                placeholder={roomPlaceholder(location.carrier)}
-              />
-            </label>
+            {location.carrier === "jitsi" ? (
+              <>
+                <label className="grid gap-2 text-sm text-muted-foreground">
+                  Jitsi Server
+                  <input
+                    className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                    value={location.jitsi_instance}
+                    onChange={(event) => setLocation(index, { jitsi_instance: event.target.value })}
+                    placeholder="https://meet.jit.si"
+                  />
+                </label>
+                <label className="grid gap-2 text-sm text-muted-foreground">
+                  Room ID
+                  <div className="flex gap-2">
+                    <input
+                      className="h-10 flex-1 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                      value={location.room_id}
+                      onChange={(event) => setLocation(index, { room_id: event.target.value })}
+                      placeholder="MyRoom"
+                    />
+                    <button
+                      className="inline-flex h-10 items-center rounded-md border border-primary bg-secondary px-3 text-xs font-medium text-primary hover:bg-primary/10"
+                      type="button"
+                      onClick={() => setLocation(index, { room_id: crypto.randomUUID() })}
+                    >
+                      Generate
+                    </button>
+                  </div>
+                </label>
+              </>
+            ) : (
+              <label className="grid gap-2 text-sm text-muted-foreground">
+                Room ID
+                <input
+                  className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                  value={location.room_id}
+                  onChange={(event) => setLocation(index, { room_id: event.target.value })}
+                  placeholder={roomPlaceholder(location.carrier)}
+                />
+              </label>
+            )}
             <label className="grid gap-2 text-sm text-muted-foreground">
               Key
               <div className="flex gap-2">
@@ -1226,10 +1311,15 @@ function App() {
 
   const openEditLocation = (client: ClientState, location: LocationState, index: number) => {
     setEditLocation({ client, location, index });
+    const { instance: jitsi_instance, room: jitsiRoom } =
+      location.carrier === "jitsi"
+        ? splitJitsiRoomId(location.room_id)
+        : { instance: DEFAULT_JITSI_INSTANCE, room: location.room_id };
     setLocationForm(
       normalizeLocationForm({
         name: location.name,
-        room_id: location.room_id,
+        room_id: location.carrier === "jitsi" ? jitsiRoom : location.room_id,
+        jitsi_instance,
         key: location.key,
         carrier: location.carrier,
         transport: location.transport,
