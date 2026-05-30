@@ -270,6 +270,16 @@ read_env_value() {
 	printf '%s\n' "$value"
 }
 
+ensure_env_value() {
+	local key="$1" value="$2" file="$3"
+	if grep -Eq "^${key}=" "$file" 2>/dev/null; then
+		return
+	fi
+	cat >> "$file" <<EOF
+${key}='$value'
+EOF
+}
+
 write_panel_env_if_missing() {
 	install -d -m 0755 "$CONFIG_DIR"
 	if [ -f "$PANEL_ENV_PATH" ]; then
@@ -280,7 +290,10 @@ write_panel_env_if_missing() {
 		else
 			DISPLAY_ADMIN_PATH="/admin"
 		fi
-		if [ "$PANEL_SUPPORTS_TLS" = "1" ] && [ -n "$(read_env_value OLCRTC_MANAGER_TLS_CERT "$PANEL_ENV_PATH")" ]; then
+		if [ "$PANEL_SUPPORTS_TLS" = "1" ] && [ "$PANEL_TLS" = "1" ]; then
+			ensure_env_value OLCRTC_MANAGER_TLS_CERT "$TLS_CERT_PATH" "$PANEL_ENV_PATH"
+			ensure_env_value OLCRTC_MANAGER_TLS_KEY "$TLS_KEY_PATH" "$PANEL_ENV_PATH"
+			chmod 0600 "$PANEL_ENV_PATH"
 			DISPLAY_SCHEME="https"
 		fi
 		return

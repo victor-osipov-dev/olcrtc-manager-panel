@@ -374,6 +374,28 @@ func TestLogRequestTargetAllowsSlashesInRoomID(t *testing.T) {
 	}
 }
 
+func TestTLSFilesFromEnv(t *testing.T) {
+	t.Setenv("OLCRTC_MANAGER_TLS_CERT", "/tmp/panel.crt")
+	t.Setenv("OLCRTC_MANAGER_TLS_KEY", "/tmp/panel.key")
+
+	cert, key, enabled, err := tlsFilesFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !enabled || cert != "/tmp/panel.crt" || key != "/tmp/panel.key" {
+		t.Fatalf("tls files = %q, %q, %v", cert, key, enabled)
+	}
+}
+
+func TestTLSFilesFromEnvRequiresPair(t *testing.T) {
+	t.Setenv("OLCRTC_MANAGER_TLS_CERT", "/tmp/panel.crt")
+	t.Setenv("OLCRTC_MANAGER_TLS_KEY", "")
+
+	if _, _, _, err := tlsFilesFromEnv(); err == nil {
+		t.Fatal("expected error for partial TLS env")
+	}
+}
+
 func TestDeleteLastClient(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
