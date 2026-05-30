@@ -540,7 +540,7 @@ func TestConfigUnmarshalClientsFormat(t *testing.T) {
 			"locations": [
 				{
 					"name": "Netherlands",
-					"carrier": "wbstream",
+					"carrier": "jitsi",
 					"transport": {"type": "datachannel"},
 					"link": "direct",
 					"data": "data",
@@ -609,7 +609,7 @@ func TestAddClientUsesExplicitLocationsWithoutRoomGeneration(t *testing.T) {
 				"room_id": "wb-room",
 				"key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"carrier": "wbstream",
-				"transport": "datachannel",
+				"transport": "vp8channel",
 				"dns": "1.1.1.1:53"
 			},
 			{
@@ -676,7 +676,7 @@ func TestUpdateClientReplacesLocations(t *testing.T) {
 			"room_id": "room-01",
 			"key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"carrier": "wbstream",
-			"transport": "datachannel",
+			"transport": "vp8channel",
 			"dns": "1.1.1.1:53"
 		}]
 	}`)
@@ -806,8 +806,8 @@ func TestSupervisorReloadStartsAddedLocationAndUpdatesSubscription(t *testing.T)
 		t.Fatal(err)
 	}
 
-	if got := strings.Join(started, ","); got != "user:room-01:datachannel,user:room-02:datachannel" {
-		t.Fatalf("started = %q, want user:room-01:datachannel,user:room-02:datachannel", got)
+	if got := strings.Join(started, ","); got != "user:room-01:vp8channel,user:room-02:vp8channel" {
+		t.Fatalf("started = %q, want user:room-01:vp8channel,user:room-02:vp8channel", got)
 	}
 	if got := supervisor.Subscription(time.Unix(1778011200, 0)); !strings.Contains(got, "$Germany") {
 		t.Fatalf("subscription was not updated:\n%s", got)
@@ -876,7 +876,7 @@ func testLocation(roomID, name string) Location {
 		ClientID:  "user",
 		Endpoint:  Endpoint{RoomID: roomID, Key: "key"},
 		Carrier:   "wbstream",
-		Transport: Transport{Type: "datachannel"},
+		Transport: Transport{Type: "vp8channel"},
 		Link:      "direct",
 		Data:      "data",
 		DNS:       "1.1.1.1:53",
