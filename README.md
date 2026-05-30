@@ -68,13 +68,13 @@ curl -fsSL https://raw.githubusercontent.com/BigDaddy3334/olcrtc-manager-panel/m
 - сохраняет существующие `config` и `panel.env`;
 - устанавливает и запускает `olcrtc-manager.service`.
 
-По умолчанию сервис слушает `127.0.0.1:8888`. Чтобы привязать панель напрямую к публичному интерфейсу VPS:
+По умолчанию сервис слушает `0.0.0.0:<random-port>` и сразу доступен по внешнему IP VPS. Чтобы оставить панель только на localhost для nginx/reverse proxy:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BigDaddy3334/olcrtc-manager-panel/main/scripts/install.sh | sudo env PANEL_ADDR=0.0.0.0 bash
+curl -fsSL https://raw.githubusercontent.com/BigDaddy3334/olcrtc-manager-panel/main/scripts/install.sh | sudo env PANEL_ADDR=127.0.0.1 bash
 ```
 
-У чистой установки нет пароля по умолчанию. Откройте `/admin` и создайте пароль администратора при первом запуске. Если вы привязываете панель к `0.0.0.0`, сделайте это сразу или сначала поместите панель за nginx/файрвол.
+У чистой установки нет пароля по умолчанию. Откройте выведенный установщиком URL и создайте пароль администратора при первом запуске. Если панель опубликована напрямую, задайте пароль сразу и ограничьте доступ файрволом при необходимости.
 В чистой установке также нет комнат; после входа создайте клиентов и вставьте ID комнат вручную.
 
 Опции установщика можно передавать через переменные окружения:
@@ -110,7 +110,7 @@ sudo systemctl status olcrtc-manager
 sudo journalctl -u olcrtc-manager -f
 ```
 
-Менеджер слушает `127.0.0.1:<config.port>`. В примерах по умолчанию используется порт `8888`.
+При установке через скрипт менеджер слушает `0.0.0.0:<config.port>`. При ручном запуске без `OLCRTC_MANAGER_ADDR` бинарь слушает `127.0.0.1:<config.port>`. В примерах по умолчанию используется порт `8888`.
 
 ## Первый запуск
 
@@ -139,7 +139,7 @@ OLCRTC_MANAGER_PASS='your-password'
 
 ## Reverse Proxy
 
-По умолчанию менеджер привязывается к `127.0.0.1`. Чтобы опубликовать его через nginx:
+Для nginx/reverse proxy установите панель локально с `PANEL_ADDR=127.0.0.1` и проксируйте на неё:
 
 ```nginx
 server {

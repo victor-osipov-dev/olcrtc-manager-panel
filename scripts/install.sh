@@ -29,7 +29,7 @@ AUTO_SWAP="${AUTO_SWAP:-1}"
 BUILD_SWAP_FILE="${BUILD_SWAP_FILE:-/swapfile}"
 BUILD_SWAP_SIZE="${BUILD_SWAP_SIZE:-2G}"
 GO_BUILD_P="${GO_BUILD_P:-}"
-PANEL_ADDR="${PANEL_ADDR:-127.0.0.1}"
+PANEL_ADDR="${PANEL_ADDR:-0.0.0.0}"
 PANEL_PORT="${PANEL_PORT:-$(random_port)}"
 PANEL_ADMIN_PATH="${PANEL_ADMIN_PATH:-${OLCRTC_MANAGER_ADMIN_PATH:-/admin-$(random_hex 4)}}"
 case "$PANEL_ADMIN_PATH" in
@@ -375,7 +375,7 @@ main() {
 		log "Password: $GENERATED_ADMIN_PASS"
 	fi
 	if [ "$PANEL_ADDR" = "127.0.0.1" ]; then
-		log "the panel listens locally; expose it with nginx or reinstall with PANEL_ADDR=0.0.0.0"
+		log "the panel listens locally; reinstall with PANEL_ADDR=0.0.0.0 to expose it directly"
 	fi
 	if [ "$PANEL_TLS" = "1" ]; then
 		log "TLS uses a self-signed certificate by default; browsers may ask you to accept it."
