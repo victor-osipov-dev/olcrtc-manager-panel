@@ -42,6 +42,8 @@ var authLimiter = newAuthLimiter()
 var adminSessions = newSessionStore()
 var adminConfigPath string
 
+const defaultGeneratedJitsiBase = "https://meet.jit.si"
+
 type Config struct {
 	Version          int        `json:"version"`
 	LegacyVersion    int        `json:"vesion"`
@@ -1571,6 +1573,8 @@ func deleteLocation(configPath, clientID, roomID string) error {
 }
 
 func regenerateClientRoom(ctx context.Context, configPath, olcrtcPath, clientID string) error {
+	_ = ctx
+	_ = olcrtcPath
 	clientID = strings.TrimSpace(clientID)
 	if clientID == "" {
 		return errors.New("client_id is required")
@@ -1586,7 +1590,7 @@ func regenerateClientRoom(ctx context.Context, configPath, olcrtcPath, clientID 
 		}
 		for j := range cfg.Clients[i].Locations {
 			loc := &cfg.Clients[i].Locations[j]
-			loc.Endpoint.RoomID, err = generateRoomID(ctx, olcrtcPath, loc.Carrier, loc.DNS)
+			loc.Endpoint.RoomID, err = generateRoomIDForCarrier(loc.Carrier, loc.Endpoint.RoomID)
 			if err != nil {
 				return err
 			}
@@ -1675,32 +1679,47 @@ func templateLocations(cfg Config, fromClient string) ([]Location, error) {
 }
 
 func generateRoomID(ctx context.Context, olcrtcPath, carrier, dns string) (string, error) {
-	genCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	_ = ctx
+	_ = olcrtcPath
+	_ = dns
+	return generateRoomIDForCarrier(carrier, "")
+}
 
-	cfg := olcrtcRuntimeConfig{
-		Mode: "gen",
-		Auth: olcrtcAuthConfig{Provider: carrier},
-		Net:  olcrtcNetConfig{DNS: dns},
-		Gen:  &olcrtcGenConfig{Amount: 1},
+func generateRoomIDForCarrier(carrier, currentRoomID string) (string, error) {
+	switch strings.TrimSpace(carrier) {
+	case "jitsi":
+		room, err := randomUUID()
+		if err != nil {
+			return "", err
+		}
+		return jitsiRoomBase(currentRoomID) + "/" + room, nil
+	case "wbstream", "telemost":
+		return "", fmt.Errorf("%s room generation is not supported by current olcrtc; create a room manually and paste its id", carrier)
+	default:
+		return "", fmt.Errorf("unknown carrier %q", carrier)
 	}
-	configPath, err := writeTempOlcrtcConfig("olcrtc-manager-gen", cfg)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = os.Remove(configPath) }()
+}
 
-	out, err := exec.CommandContext(genCtx, olcrtcPath, configPath).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("generate room id: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			return line, nil
+func jitsiRoomBase(roomID string) string {
+	trimmed := strings.TrimSpace(roomID)
+	if idx := strings.LastIndex(trimmed, "/"); idx > 0 {
+		base := strings.TrimRight(trimmed[:idx], "/")
+		if base != "" {
+			return base
 		}
 	}
-	return "", errors.New("olcrtc generated empty room id")
+	return defaultGeneratedJitsiBase
+}
+
+func randomUUID() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
+	encoded := hex.EncodeToString(buf)
+	return fmt.Sprintf("%s-%s-%s-%s-%s", encoded[0:8], encoded[8:12], encoded[12:16], encoded[16:20], encoded[20:32]), nil
 }
 
 func serverConfig(loc Location) (olcrtcRuntimeConfig, error) {

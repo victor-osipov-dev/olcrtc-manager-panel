@@ -321,4 +321,6 @@ scripts/modify-user.sh /etc/olcrtc-manager/config.json alice --location-name Ger
 scripts/delete-user.sh /etc/olcrtc-manager/config.json alice
 ```
 
+`add-user.sh` без `--room` генерирует только Jitsi-комнаты. Для `wbstream` и `telemost` комнату нужно создать вручную у провайдера и передать её через `--room`.
+
 Передайте `--reload http://127.0.0.1:8888/-/reload`, чтобы перезагрузить работающий менеджер после сохранения конфигурации.

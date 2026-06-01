@@ -519,6 +519,49 @@ func TestConfigAllowsFreshInstallWithoutLocations(t *testing.T) {
 	}
 }
 
+func TestGenerateRoomIDUsesLocalJitsiUUID(t *testing.T) {
+	roomID, err := generateRoomID(context.Background(), "/bin/false", "jitsi", "1.1.1.1:53")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(roomID, defaultGeneratedJitsiBase+"/") {
+		t.Fatalf("roomID = %q, want default jitsi base", roomID)
+	}
+}
+
+func TestGenerateRoomIDRejectsProvidersWithoutRoomCreation(t *testing.T) {
+	if _, err := generateRoomID(context.Background(), "/bin/false", "wbstream", "1.1.1.1:53"); err == nil {
+		t.Fatal("generateRoomID(wbstream) error = nil")
+	}
+}
+
+func TestRegenerateClientRoomPreservesJitsiBase(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	loc := testLocation("https://meet.cryptopro.ru/old-room", "Jitsi")
+	loc.Carrier = "jitsi"
+	loc.Transport = Transport{Type: "datachannel"}
+	if err := writeConfig(configPath, Config{
+		Name:    "ScumVPN",
+		Port:    8888,
+		Clients: []Client{{ClientID: "user", Locations: []Location{loc}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := regenerateClientRoom(context.Background(), configPath, "/bin/false", "user"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roomID := cfg.Clients[0].Locations[0].Endpoint.RoomID
+	if !strings.HasPrefix(roomID, "https://meet.cryptopro.ru/") || strings.HasSuffix(roomID, "/old-room") {
+		t.Fatalf("regenerated roomID = %q", roomID)
+	}
+}
+
 func TestTransportUnmarshalPayload(t *testing.T) {
 	var cfg Config
 	data := []byte(`{
