@@ -214,9 +214,24 @@ detect_manager_features() {
 
 read_config_port() {
 	local port
-	port="$(grep -o '"port"[[:space:]]*:[[:space:]]*[0-9]*' "$CONFIG_PATH" 2>/dev/null | grep -o '[0-9]*$' | head -n1)"
-	if [ -n "$port" ]; then
+	[ -f "$CONFIG_PATH" ] || return 0
+	port="$(tr -d '\n\r' < "$CONFIG_PATH" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+	case "$port" in
+		''|*[!0-9]*) return 0 ;;
+	esac
+	if [ "$port" -gt 0 ] && [ "$port" -le 65535 ]; then
 		printf '%s\n' "$port"
+	fi
+}
+
+apply_config_port() {
+	local port
+	port="$(read_config_port)"
+	if [ -n "$port" ]; then
+		PANEL_PORT="$port"
+		log "using panel port from config: $PANEL_PORT"
+	elif [ -f "$CONFIG_PATH" ]; then
+		log "warning: could not read a valid port from $CONFIG_PATH; showing generated port $PANEL_PORT"
 	fi
 }
 
@@ -382,10 +397,7 @@ main() {
 	build_manager "$panel_src"
 	detect_manager_features
 	write_config_if_missing
-	port="$(read_config_port)"
-	if [ -n "$port" ]; then
-		PANEL_PORT="$port"
-	fi
+	apply_config_port
 	write_tls_cert_if_missing
 	write_panel_env_if_missing
 	install_service
