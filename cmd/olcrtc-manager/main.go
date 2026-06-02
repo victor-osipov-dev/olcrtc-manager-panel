@@ -53,7 +53,7 @@ type Config struct {
 	Refresh          string     `json:"refresh,omitempty"`
 	ActiveLocationID string     `json:"active_location_id"`
 	Clients          []Client   `json:"clients"`
-	Locations        []Location `json:"locations"`
+	Locations        []Location `json:"-"`
 }
 
 func (c *Config) UnmarshalJSON(data []byte) error {
@@ -65,6 +65,27 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	*c = Config(parsed)
 	c.Normalize()
 	return nil
+}
+
+func (c Config) MarshalJSON() ([]byte, error) {
+	type configJSON struct {
+		Version          int      `json:"version"`
+		Name             string   `json:"name"`
+		Port             int      `json:"port"`
+		SubscriptionPath string   `json:"subscription_path,omitempty"`
+		Refresh          string   `json:"refresh,omitempty"`
+		ActiveLocationID string   `json:"active_location_id,omitempty"`
+		Clients          []Client `json:"clients"`
+	}
+	return json.Marshal(configJSON{
+		Version:          c.Version,
+		Name:             c.Name,
+		Port:             c.Port,
+		SubscriptionPath: c.SubscriptionPath,
+		Refresh:          c.Refresh,
+		ActiveLocationID: c.ActiveLocationID,
+		Clients:          c.Clients,
+	})
 }
 
 type Client struct {
@@ -1634,29 +1655,12 @@ func rotateClientKey(configPath, clientID string) error {
 }
 
 func (c *Config) ensureClientsFormat() {
-	if len(c.Clients) != 0 {
-		for i := range c.Clients {
-			for j := range c.Clients[i].Locations {
-				if c.Clients[i].Locations[j].ClientID == "" {
-					c.Clients[i].Locations[j].ClientID = c.Clients[i].ClientID
-				}
+	for i := range c.Clients {
+		for j := range c.Clients[i].Locations {
+			if c.Clients[i].Locations[j].ClientID == "" {
+				c.Clients[i].Locations[j].ClientID = c.Clients[i].ClientID
 			}
 		}
-		return
-	}
-
-	byClient := make(map[string][]Location)
-	for _, loc := range c.Locations {
-		byClient[loc.ClientID] = append(byClient[loc.ClientID], loc)
-	}
-	clientIDs := make([]string, 0, len(byClient))
-	for id := range byClient {
-		clientIDs = append(clientIDs, id)
-	}
-	sort.Strings(clientIDs)
-	c.Clients = make([]Client, 0, len(clientIDs))
-	for _, id := range clientIDs {
-		c.Clients = append(c.Clients, Client{ClientID: id, Locations: byClient[id]})
 	}
 }
 

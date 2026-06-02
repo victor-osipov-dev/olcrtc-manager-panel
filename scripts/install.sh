@@ -212,6 +212,14 @@ detect_manager_features() {
 	fi
 }
 
+read_config_port() {
+	local port
+	port="$(grep -o '"port"[[:space:]]*:[[:space:]]*[0-9]*' "$CONFIG_PATH" 2>/dev/null | grep -o '[0-9]*$' | head -n1)"
+	if [ -n "$port" ]; then
+		printf '%s\n' "$port"
+	fi
+}
+
 write_config_if_missing() {
 	install -d -m 0755 "$CONFIG_DIR"
 	install -d -m 0700 "$CONFIG_DIR/backups"
@@ -374,6 +382,10 @@ main() {
 	build_manager "$panel_src"
 	detect_manager_features
 	write_config_if_missing
+	port="$(read_config_port)"
+	if [ -n "$port" ]; then
+		PANEL_PORT="$port"
+	fi
 	write_tls_cert_if_missing
 	write_panel_env_if_missing
 	install_service

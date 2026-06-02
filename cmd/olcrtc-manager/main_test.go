@@ -568,21 +568,23 @@ func TestTransportUnmarshalPayload(t *testing.T) {
 		"version": 4,
 		"name": "ScumVPN",
 		"port": 8888,
-		"locations": [{
-			"name": "Netherlands",
+		"clients": [{
 			"client-id": "user",
-			"endpoint": {"room_id": "room-01", "key": "key"},
-			"carrier": "wbstream",
-			"transport": {
-				"type": "vp8channel",
-				"payload": {
-					"vp8-fps": 60,
-					"vp8-batch": 64
-				}
-			},
-			"link": "direct",
-			"data": "data",
-			"dns": "1.1.1.1:53"
+			"locations": [{
+				"name": "Netherlands",
+				"endpoint": {"room_id": "room-01", "key": "key"},
+				"carrier": "wbstream",
+				"transport": {
+					"type": "vp8channel",
+					"payload": {
+						"vp8-fps": 60,
+						"vp8-batch": 64
+					}
+				},
+				"link": "direct",
+				"data": "data",
+				"dns": "1.1.1.1:53"
+			}]
 		}]
 	}`)
 
