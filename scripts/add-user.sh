@@ -169,7 +169,7 @@ def jitsi_base(current_room):
         base = current_room.rsplit("/", 1)[0].rstrip("/")
         if base:
             return base
-    return "https://meet.jit.si"
+    return "https://meet.handyweb.org"
 
 def new_room_id(room_carrier, current_room=""):
     room_carrier = (room_carrier or "").strip()

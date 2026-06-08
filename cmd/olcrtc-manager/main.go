@@ -42,7 +42,7 @@ var authLimiter = newAuthLimiter()
 var adminSessions = newSessionStore()
 var adminConfigPath string
 
-const defaultGeneratedJitsiBase = "https://meet.jit.si"
+const defaultGeneratedJitsiBase = "https://meet.handyweb.org"
 
 type Config struct {
 	Version          int        `json:"version"`

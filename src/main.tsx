@@ -152,7 +152,7 @@ type SettingsForm = {
   refresh: string;
 };
 
-const DEFAULT_JITSI_INSTANCE = "https://meet.jit.si";
+const DEFAULT_JITSI_INSTANCE = "https://meet.handyweb.org";
 
 function splitJitsiRoomId(roomId: string): { instance: string; room: string } {
   const trimmed = roomId.trim();
@@ -242,7 +242,7 @@ function transportOptions(carrier: string) {
 }
 
 function roomPlaceholder(carrier: string) {
-  return carrier === "jitsi" ? "https://meet1.arbitr.ru/room" : "room-id";
+  return carrier === "jitsi" ? `${DEFAULT_JITSI_INSTANCE}/room` : "room-id";
 }
 
 function normalizeLocationForm(location: ClientLocationForm): ClientLocationForm {
@@ -694,7 +694,7 @@ function LocationFormFields({
               className="h-10 rounded-md border border-border bg-background px-3 text-foreground outline-none focus:border-primary"
               value={location.jitsi_instance}
               onChange={(event) => set({ jitsi_instance: event.target.value })}
-              placeholder="https://meet.jit.si"
+              placeholder={DEFAULT_JITSI_INSTANCE}
             />
           </label>
           <label className="grid gap-2 text-sm text-muted-foreground">
@@ -1007,7 +1007,7 @@ function ClientFormFields({
                     className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
                     value={location.jitsi_instance}
                     onChange={(event) => setLocation(index, { jitsi_instance: event.target.value })}
-                    placeholder="https://meet.jit.si"
+                    placeholder={DEFAULT_JITSI_INSTANCE}
                   />
                 </label>
                 <label className="grid gap-2 text-sm text-muted-foreground">

@@ -188,7 +188,7 @@ https://example.com:9443/admin
         {
           "name": "Current VPS",
           "endpoint": {
-            "room_id": "https://meet1.arbitr.ru/room",
+            "room_id": "https://meet.handyweb.org/room",
             "key": "e830d36f7be8cfb04a741fc1a5e2ddf8ff04f30985dc070616483f939ad5fafe"
           },
           "carrier": "jitsi",
@@ -229,7 +229,7 @@ https://example.com:9443/admin
 
 Конфигурация менеджера остается JSON-файлом для данных панели, квот и подписок. Для каждой запущенной локации менеджер записывает временную runtime-конфигурацию `olcrtc` в YAML и запускает `olcrtc <config.yaml>`.
 
-`carrier` сопоставляется с новым полем `auth.provider` в `olcrtc`. Поддерживаемые провайдеры: `jitsi`, `wbstream` и `telemost`. Для `jitsi` значение `endpoint.room_id` — это полный URL комнаты, например `https://meet1.arbitr.ru/room`. Для остальных провайдеров это ID комнаты провайдера. Значение `any` отклоняется.
+`carrier` сопоставляется с новым полем `auth.provider` в `olcrtc`. Поддерживаемые провайдеры: `jitsi`, `wbstream` и `telemost`. Для `jitsi` значение `endpoint.room_id` — это полный URL комнаты, например `https://meet.handyweb.org/room`. Для остальных провайдеров это ID комнаты провайдера. Значение `any` отклоняется.
 
 `proxy` необязателен. Если он задан, менеджер пробрасывает его в runtime YAML как `socks.proxy_addr`, `socks.proxy_port`, `socks.proxy_user` и `socks.proxy_pass`. Это upstream SOCKS5-прокси, через который серверная сторона `olcrtc` будет открывать исходящие подключения; `user`/`pass` используются для RFC 1929-аутентификации.
 
