@@ -19,7 +19,7 @@ random_port() {
 	printf '%s\n' 8888
 }
 
-PANEL_REPO="${PANEL_REPO:-https://github.com/BigDaddy3334/olcrtc-manager-panel.git}"
+PANEL_REPO="${PANEL_REPO:-https://github.com/victor-osipov-dev/olcrtc-manager-panel.git}"
 PANEL_REF="${PANEL_REF:-main}"
 OLCRTC_REPO="${OLCRTC_REPO:-https://github.com/openlibrecommunity/olcrtc.git}"
 OLCRTC_REF="${OLCRTC_REF:-master}"
