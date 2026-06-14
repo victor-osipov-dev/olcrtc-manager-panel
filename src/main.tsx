@@ -4,6 +4,7 @@ import {
   Activity,
   ChevronDown,
   ChevronRight,
+  Clock,
   Copy,
   Edit3,
   KeyRound,
@@ -87,6 +88,9 @@ type SettingsState = {
   port: number;
   subscription_path: string;
   refresh?: string;
+  restart_interval?: string;
+  restart_enabled?: boolean;
+  next_restart_at?: string;
   admin_user: string;
   port_override: boolean;
   restart_required?: boolean;
@@ -150,6 +154,7 @@ type SettingsForm = {
   port: string;
   subscription_path: string;
   refresh: string;
+  restart_interval: string;
 };
 
 const DEFAULT_JITSI_INSTANCE = "https://meet.handyweb.org";
@@ -200,6 +205,7 @@ const defaultSettingsForm: SettingsForm = {
   port: "",
   subscription_path: "sub",
   refresh: "",
+  restart_interval: "",
 };
 
 const payloadFields: Record<string, Array<{ key: string; label: string; defaultValue: string }>> = {
@@ -312,6 +318,37 @@ function cleanQuota(quota: Quota): Quota {
 
 function cleanRefresh(refresh: string) {
   return refresh.trim() || undefined;
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function settingsPayload(form: SettingsForm) {
+  const port = Number(form.port);
+  if (!form.name.trim()) throw new Error("Укажи название сервера");
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("Порт должен быть от 1 до 65535");
+  return {
+    name: form.name.trim(),
+    port,
+    subscription_path: form.subscription_path.trim(),
+    refresh: cleanRefresh(form.refresh),
+    restart_interval: form.restart_interval.trim(),
+  };
+}
+
+function applySettingsResponse(body: SettingsState, setSettings: (value: SettingsState) => void, setSettingsForm: (value: SettingsForm) => void) {
+  setSettings(body);
+  setSettingsForm({
+    name: body.name,
+    port: String(body.port),
+    subscription_path: body.subscription_path,
+    refresh: body.refresh ?? "",
+    restart_interval: body.restart_interval ?? "",
+  });
 }
 
 function locationsForSubmit(locations: ClientLocationForm[]) {
@@ -1168,6 +1205,7 @@ function App() {
   const [clientLogTarget, setClientLogTarget] = useState<ClientState | null>(null);
   const [qrTarget, setQrTarget] = useState<{ clientID: string; location: LocationState } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showRestartSchedule, setShowRestartSchedule] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [clientLogs, setClientLogs] = useState<ClientLogGroup[]>([]);
   const [createForm, setCreateForm] = useState<ClientForm>(defaultForm);
@@ -1220,13 +1258,7 @@ function App() {
   const loadSettings = async () => {
     const res = await request("/api/settings", { cache: "no-store" });
     const body = (await res.json()) as SettingsState;
-    setSettings(body);
-    setSettingsForm({
-      name: body.name,
-      port: String(body.port),
-      subscription_path: body.subscription_path,
-      refresh: body.refresh ?? "",
-    });
+    applySettingsResponse(body, setSettings, setSettingsForm);
   };
 
   const loadAudit = async () => {
@@ -1301,6 +1333,16 @@ function App() {
 
   const openSettings = async () => {
     setShowSettings(true);
+    setNotice("");
+    try {
+      await loadSettings();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const openRestartSchedule = async () => {
+    setShowRestartSchedule(true);
     setNotice("");
     try {
       await loadSettings();
@@ -1457,27 +1499,13 @@ function App() {
     setBusy(true);
     setNotice("");
     try {
-      const port = Number(settingsForm.port);
-      if (!settingsForm.name.trim()) throw new Error("Укажи название сервера");
-      if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("Порт должен быть от 1 до 65535");
       const res = await request("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: settingsForm.name.trim(),
-          port,
-          subscription_path: settingsForm.subscription_path.trim(),
-          refresh: cleanRefresh(settingsForm.refresh),
-        }),
+        body: JSON.stringify(settingsPayload(settingsForm)),
       });
       const body = (await res.json()) as SettingsState;
-      setSettings(body);
-      setSettingsForm({
-        name: body.name,
-        port: String(body.port),
-        subscription_path: body.subscription_path,
-        refresh: body.refresh ?? "",
-      });
+      applySettingsResponse(body, setSettings, setSettingsForm);
       await loadState();
       await loadAudit();
       if (body.restart_required) {
@@ -1491,6 +1519,35 @@ function App() {
       setBusy(false);
     }
   };
+
+  const saveRestartSchedule = () =>
+    runAction(async () => {
+      const res = await request("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settingsPayload(settingsForm)),
+      });
+      const body = (await res.json()) as SettingsState;
+      applySettingsResponse(body, setSettings, setSettingsForm);
+      await loadState();
+      await loadAudit();
+      setShowRestartSchedule(false);
+    }, settingsForm.restart_interval.trim() ? "Расписание автоперезагрузки сохранено" : "Автоперезагрузка отключена");
+
+  const disableRestartSchedule = () =>
+    runAction(async () => {
+      const payload = settingsPayload({ ...settingsForm, restart_interval: "" });
+      const res = await request("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = (await res.json()) as SettingsState;
+      applySettingsResponse(body, setSettings, setSettingsForm);
+      await loadState();
+      await loadAudit();
+      setShowRestartSchedule(false);
+    }, "Автоперезагрузка отключена");
 
   const openLogs = async (clientID: string, location: LocationState) => {
     setLogs([]);
@@ -1564,6 +1621,16 @@ function App() {
             <HeaderMetric label="Panel mem" value={formatBytes(metrics?.memory.heap_alloc_bytes)} />
             <HeaderMetric label="Servers mem" value={formatBytes(serversMemoryBytes)} />
             <HeaderMetric label="Panel PID" value={metrics?.manager.pid ?? "..."} />
+            {settings?.restart_enabled && settings.restart_interval && (
+              <HeaderMetric label="Авто" value={settings.restart_interval} />
+            )}
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
+              onClick={openRestartSchedule}
+            >
+              <Clock className="h-4 w-4" />
+              Автоперезагрузка
+            </button>
             <button
               className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
               onClick={openSettings}
@@ -1905,6 +1972,59 @@ function App() {
                 onClick={() => copySubscription(qrTarget.clientID)}
               >
                 Копировать Sub
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showRestartSchedule && (
+        <Modal title="Автоперезагрузка инстансов" onClose={() => setShowRestartSchedule(false)}>
+          <div className="grid gap-5 p-5">
+            <section className="grid gap-3 rounded-md border border-border bg-background p-4">
+              <div className="text-sm font-medium text-foreground">Интервал перезагрузки</div>
+              <p className="text-sm text-muted-foreground">
+                Все активные инстансы будут перезапускаться с указанным интервалом. Формат: 5m, 6h, 1d. Минимум 5m. Пустое значение — выключено.
+              </p>
+              <label className="grid gap-2 text-sm text-muted-foreground">
+                Интервал
+                <input
+                  className="h-10 rounded-md border border-border bg-card px-3 text-foreground outline-none focus:border-primary"
+                  value={settingsForm.restart_interval}
+                  onChange={(event) => setSettingsForm({ ...settingsForm, restart_interval: event.target.value })}
+                  placeholder="например 6h"
+                />
+              </label>
+              {settings?.restart_enabled && settings.next_restart_at && (
+                <div className="text-sm text-muted-foreground">
+                  Следующая перезагрузка: {formatDateTime(settings.next_restart_at)}
+                </div>
+              )}
+            </section>
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                className="h-9 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80"
+                onClick={() => setShowRestartSchedule(false)}
+              >
+                Закрыть
+              </button>
+              {settings?.restart_enabled && (
+                <button
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-muted px-3 text-sm hover:bg-muted/80 disabled:opacity-60"
+                  disabled={busy}
+                  onClick={disableRestartSchedule}
+                >
+                  Отключить
+                </button>
+              )}
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-black hover:bg-primary/90 disabled:opacity-60"
+                disabled={busy}
+                onClick={saveRestartSchedule}
+              >
+                <RefreshCw className="h-4 w-4" />
+                Сохранить
               </button>
             </div>
           </div>

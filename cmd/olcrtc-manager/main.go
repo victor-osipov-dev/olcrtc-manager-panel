@@ -51,6 +51,7 @@ type Config struct {
 	Port             int        `json:"port"`
 	SubscriptionPath string     `json:"subscription_path"`
 	Refresh          string     `json:"refresh,omitempty"`
+	RestartInterval  string     `json:"restart_interval,omitempty"`
 	ActiveLocationID string     `json:"active_location_id"`
 	Clients          []Client   `json:"clients"`
 	Locations        []Location `json:"-"`
@@ -74,6 +75,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		Port             int      `json:"port"`
 		SubscriptionPath string   `json:"subscription_path,omitempty"`
 		Refresh          string   `json:"refresh,omitempty"`
+		RestartInterval  string   `json:"restart_interval,omitempty"`
 		ActiveLocationID string   `json:"active_location_id,omitempty"`
 		Clients          []Client `json:"clients"`
 	}
@@ -83,6 +85,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		Port:             c.Port,
 		SubscriptionPath: c.SubscriptionPath,
 		Refresh:          c.Refresh,
+		RestartInterval:  c.RestartInterval,
 		ActiveLocationID: c.ActiveLocationID,
 		Clients:          c.Clients,
 	})
@@ -322,11 +325,15 @@ func run() error {
 	defer supervisor.StopAll()
 	go quotaEnforcer.Run(ctx)
 
+	restartScheduler := NewRestartScheduler(configPath, supervisor)
+	go restartScheduler.Run(ctx)
+
 	reloadc := make(chan os.Signal, 1)
 	signal.Notify(reloadc, syscall.SIGHUP)
 	defer signal.Stop(reloadc)
 
 	reload := func() error {
+		oldRestartInterval := cfg.RestartInterval
 		reloaded, err := loadConfig(configPath)
 		if err != nil {
 			return err
@@ -340,7 +347,14 @@ func run() error {
 		if err := reloaded.Validate(); err != nil {
 			return err
 		}
-		return supervisor.Reload(ctx, reloaded)
+		if err := supervisor.Reload(ctx, reloaded); err != nil {
+			return err
+		}
+		if reloaded.RestartInterval != oldRestartInterval {
+			restartScheduler.UpdateFromConfig(reloaded)
+		}
+		cfg = reloaded
+		return nil
 	}
 
 	handler := http.NewServeMux()
@@ -371,7 +385,7 @@ func run() error {
 	handler.Handle("/api/auth/logout", adminAuth(http.HandlerFunc(logoutHandler)))
 	handler.Handle("/api/auth/me", http.HandlerFunc(authMeHandler(configPath)))
 	handler.Handle("/api/auth/password", adminAuth(http.HandlerFunc(changePasswordHandler(configPath))))
-	handler.Handle("/api/settings", adminAuth(http.HandlerFunc(settingsHandler(configPath, supervisor, port != 0))))
+	handler.Handle("/api/settings", adminAuth(http.HandlerFunc(settingsHandler(configPath, supervisor, restartScheduler, port != 0))))
 	handler.Handle("/api/reload", adminAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -745,6 +759,7 @@ func (s *Supervisor) UpdateSettings(cfg Config) {
 	s.cfg.Port = cfg.Port
 	s.cfg.SubscriptionPath = cfg.SubscriptionPath
 	s.cfg.Refresh = cfg.Refresh
+	s.cfg.RestartInterval = cfg.RestartInterval
 }
 
 func (s *Supervisor) Subscription(now time.Time) string {
@@ -887,6 +902,25 @@ func (s *Supervisor) Restart(ctx context.Context, clientID, roomID, transport st
 	s.processes[key] = next
 	s.monitorProcess(ctx, key, next)
 	return nil
+}
+
+func (s *Supervisor) RestartAll(ctx context.Context, now time.Time) (int, error) {
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+
+	locs := activeLocations(cfg, now)
+	sort.Slice(locs, func(i, j int) bool {
+		return locationKey(locs[i]) < locationKey(locs[j])
+	})
+
+	var errs []error
+	for _, loc := range locs {
+		if err := s.Restart(ctx, loc.ClientID, loc.Endpoint.RoomID, loc.Transport.Type); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", locationKey(loc), err))
+		}
+	}
+	return len(locs), errors.Join(errs...)
 }
 
 func (s *Supervisor) monitorProcess(ctx context.Context, key string, p *process) {
@@ -1107,6 +1141,9 @@ type settingsResponse struct {
 	Port                int    `json:"port"`
 	SubscriptionPath    string `json:"subscription_path"`
 	Refresh             string `json:"refresh,omitempty"`
+	RestartInterval     string `json:"restart_interval,omitempty"`
+	RestartEnabled      bool   `json:"restart_enabled"`
+	NextRestartAt       string `json:"next_restart_at,omitempty"`
 	AdminUser           string `json:"admin_user"`
 	PortOverride        bool   `json:"port_override"`
 	RestartRequired     bool   `json:"restart_required,omitempty"`
@@ -1114,13 +1151,14 @@ type settingsResponse struct {
 }
 
 type updateSettingsRequest struct {
-	Name             string `json:"name"`
-	Port             int    `json:"port"`
-	SubscriptionPath string `json:"subscription_path"`
-	Refresh          string `json:"refresh"`
+	Name             string  `json:"name"`
+	Port             int     `json:"port"`
+	SubscriptionPath string  `json:"subscription_path"`
+	Refresh          string  `json:"refresh"`
+	RestartInterval  *string `json:"restart_interval,omitempty"`
 }
 
-func settingsHandler(configPath string, supervisor *Supervisor, portOverride bool) http.HandlerFunc {
+func settingsHandler(configPath string, supervisor *Supervisor, restartScheduler *RestartScheduler, portOverride bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -1129,11 +1167,16 @@ func settingsHandler(configPath string, supervisor *Supervisor, portOverride boo
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			writeJSON(w, settingsFromConfig(r, configPath, cfg, portOverride, false))
+			writeJSON(w, settingsFromConfig(r, configPath, cfg, portOverride, false, restartScheduler))
 		case http.MethodPut:
 			var req updateSettingsRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			oldCfg, err := loadConfig(configPath)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			cfg, restartRequired, err := updateSettings(configPath, req)
@@ -1142,7 +1185,10 @@ func settingsHandler(configPath string, supervisor *Supervisor, portOverride boo
 				return
 			}
 			supervisor.UpdateSettings(cfg)
-			writeJSON(w, settingsFromConfig(r, configPath, cfg, portOverride, restartRequired))
+			if req.RestartInterval != nil && cfg.RestartInterval != oldCfg.RestartInterval {
+				restartScheduler.UpdateFromConfig(cfg)
+			}
+			writeJSON(w, settingsFromConfig(r, configPath, cfg, portOverride, restartRequired, restartScheduler))
 		default:
 			w.Header().Set("Allow", "GET, PUT")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1156,6 +1202,7 @@ func updateSettings(configPath string, req updateSettingsRequest) (Config, bool,
 		return Config{}, false, err
 	}
 	oldPort := cfg.Port
+	oldRestartInterval := cfg.RestartInterval
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		return Config{}, false, errors.New("name is required")
@@ -1168,6 +1215,9 @@ func updateSettings(configPath string, req updateSettingsRequest) (Config, bool,
 	}
 	cfg.SubscriptionPath = path
 	cfg.Refresh = strings.TrimSpace(req.Refresh)
+	if req.RestartInterval != nil {
+		cfg.RestartInterval = strings.TrimSpace(*req.RestartInterval)
+	}
 	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, false, err
@@ -1175,20 +1225,31 @@ func updateSettings(configPath string, req updateSettingsRequest) (Config, bool,
 	if err := saveConfig(configPath, cfg); err != nil {
 		return Config{}, false, err
 	}
+	if req.RestartInterval != nil && cfg.RestartInterval != oldRestartInterval {
+		appendAudit(configPath, "restart_interval_updated", cfg.RestartInterval)
+	}
 	return cfg, cfg.Port != oldPort, nil
 }
 
-func settingsFromConfig(r *http.Request, configPath string, cfg Config, portOverride bool, restartRequired bool) settingsResponse {
-	return settingsResponse{
+func settingsFromConfig(r *http.Request, configPath string, cfg Config, portOverride bool, restartRequired bool, restartScheduler *RestartScheduler) settingsResponse {
+	resp := settingsResponse{
 		Name:                cfg.Name,
 		Port:                cfg.Port,
 		SubscriptionPath:    cfg.SubscriptionPath,
 		Refresh:             cfg.Refresh,
+		RestartInterval:     cfg.RestartInterval,
+		RestartEnabled:      cfg.RestartInterval != "",
 		AdminUser:           currentAdminUser(configPath),
 		PortOverride:        portOverride,
 		RestartRequired:     restartRequired,
 		SubscriptionBaseURL: subscriptionBaseURL(r, cfg.SubscriptionPath),
 	}
+	if restartScheduler != nil && resp.RestartEnabled {
+		if nextAt := restartScheduler.NextAt(); !nextAt.IsZero() {
+			resp.NextRestartAt = nextAt.UTC().Format(time.RFC3339)
+		}
+	}
+	return resp
 }
 
 func subscriptionBaseURL(r *http.Request, subscriptionPath string) string {
@@ -2227,6 +2288,109 @@ func (q *QuotaEnforcer) Run(ctx context.Context) {
 	}
 }
 
+type RestartScheduler struct {
+	configPath string
+	supervisor *Supervisor
+	mu         sync.Mutex
+	interval   time.Duration
+	nextAt     time.Time
+	wake       chan struct{}
+}
+
+func NewRestartScheduler(configPath string, supervisor *Supervisor) *RestartScheduler {
+	rs := &RestartScheduler{
+		configPath: configPath,
+		supervisor: supervisor,
+		wake:       make(chan struct{}, 1),
+	}
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return rs
+	}
+	interval, err := refreshToDuration(cfg.RestartInterval)
+	if err != nil || interval <= 0 {
+		return rs
+	}
+	rs.interval = interval
+	rs.nextAt = time.Now().Add(interval)
+	return rs
+}
+
+func (rs *RestartScheduler) NextAt() time.Time {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.nextAt
+}
+
+func (rs *RestartScheduler) UpdateFromConfig(cfg Config) {
+	interval, err := refreshToDuration(cfg.RestartInterval)
+	if err != nil {
+		interval = 0
+	}
+	rs.mu.Lock()
+	rs.interval = interval
+	if interval > 0 {
+		rs.nextAt = time.Now().Add(interval)
+	} else {
+		rs.nextAt = time.Time{}
+	}
+	rs.mu.Unlock()
+	select {
+	case rs.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (rs *RestartScheduler) Run(ctx context.Context) {
+	for {
+		rs.mu.Lock()
+		interval := rs.interval
+		nextAt := rs.nextAt
+		rs.mu.Unlock()
+
+		if interval <= 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-rs.wake:
+			}
+			continue
+		}
+
+		wait := time.Until(nextAt)
+		if wait < 0 {
+			wait = 0
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-rs.wake:
+			timer.Stop()
+		case <-timer.C:
+			count, err := rs.supervisor.RestartAll(ctx, time.Now())
+			cfg, loadErr := loadConfig(rs.configPath)
+			intervalLabel := ""
+			if loadErr == nil {
+				intervalLabel = cfg.RestartInterval
+			}
+			detail := fmt.Sprintf("scheduled, interval=%s, count=%d", intervalLabel, count)
+			if err != nil {
+				detail += ", errors=" + err.Error()
+				log.Printf("scheduled restart failed: %v", err)
+			}
+			appendAudit(rs.configPath, "instances_restarted", detail)
+
+			rs.mu.Lock()
+			if rs.interval > 0 {
+				rs.nextAt = time.Now().Add(rs.interval)
+			}
+			rs.mu.Unlock()
+		}
+	}
+}
+
 func (q *QuotaEnforcer) Register(loc Location, quota Quota, p *process) error {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
 		return errors.New("process is not running")
@@ -3007,6 +3171,7 @@ func (c *Config) Normalize() {
 		c.SubscriptionPath = path
 	}
 	c.Refresh = strings.TrimSpace(c.Refresh)
+	c.RestartInterval = strings.TrimSpace(c.RestartInterval)
 	for i := range c.Clients {
 		c.Clients[i].Refresh = strings.TrimSpace(c.Clients[i].Refresh)
 	}
@@ -3037,6 +3202,9 @@ func (c Config) Validate() error {
 	}
 	if err := validateRefresh(c.Refresh); err != nil {
 		return fmt.Errorf("refresh: %w", err)
+	}
+	if err := validateRestartInterval(c.RestartInterval); err != nil {
+		return fmt.Errorf("restart_interval: %w", err)
 	}
 	for i, client := range c.Clients {
 		if err := validateRefresh(client.Refresh); err != nil {
@@ -3238,6 +3406,48 @@ func validateRefresh(refresh string) error {
 		return errors.New("must be greater than zero")
 	}
 	return nil
+}
+
+func validateRestartInterval(interval string) error {
+	if interval == "" {
+		return nil
+	}
+	if err := validateRefresh(interval); err != nil {
+		return err
+	}
+	d, err := refreshToDuration(interval)
+	if err != nil {
+		return err
+	}
+	if d < 5*time.Minute {
+		return errors.New("must be at least 5m")
+	}
+	return nil
+}
+
+func refreshToDuration(refresh string) (time.Duration, error) {
+	if refresh == "" {
+		return 0, nil
+	}
+	if err := validateRefresh(refresh); err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(refresh[:len(refresh)-1])
+	if err != nil {
+		return 0, err
+	}
+	switch refresh[len(refresh)-1] {
+	case 's':
+		return time.Duration(n) * time.Second, nil
+	case 'm':
+		return time.Duration(n) * time.Minute, nil
+	case 'h':
+		return time.Duration(n) * time.Hour, nil
+	case 'd':
+		return time.Duration(n) * 24 * time.Hour, nil
+	default:
+		return 0, errors.New("must end with s, m, h or d")
+	}
 }
 
 func min(a, b int) int {

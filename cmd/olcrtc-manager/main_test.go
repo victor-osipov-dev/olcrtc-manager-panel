@@ -358,6 +358,156 @@ func TestConfigValidatesRefreshIntervals(t *testing.T) {
 	}
 }
 
+func TestConfigValidatesRestartInterval(t *testing.T) {
+	for _, interval := range []string{"", "5m", "30m", "6h", "1d"} {
+		cfg := Config{Name: "ScumVPN", Port: 8888, RestartInterval: interval}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate(%q) = %v, want nil", interval, err)
+		}
+	}
+
+	for _, interval := range []string{"5s", "10w"} {
+		cfg := Config{Name: "ScumVPN", Port: 8888, RestartInterval: interval}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected validation error for restart interval %q", interval)
+		}
+	}
+}
+
+func TestRefreshToDuration(t *testing.T) {
+	got, err := refreshToDuration("30m")
+	if err != nil || got != 30*time.Minute {
+		t.Fatalf("refreshToDuration(30m) = %v, %v, want 30m", got, err)
+	}
+}
+
+func TestUpdateSettingsRestartInterval(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := writeConfig(configPath, Config{
+		Name: "Old",
+		Port: 8888,
+		Clients: []Client{{
+			ClientID:  "user",
+			Locations: []Location{testLocation("room-01", "Netherlands")},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, restartRequired, err := updateSettings(configPath, updateSettingsRequest{
+		Name:             "Old",
+		Port:             8888,
+		SubscriptionPath: "sub",
+		Refresh:          "10m",
+		RestartInterval:  ptrString("6h"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restartRequired {
+		t.Fatal("restartRequired = true, want false")
+	}
+	if cfg.RestartInterval != "6h" {
+		t.Fatalf("RestartInterval = %q, want 6h", cfg.RestartInterval)
+	}
+
+	reloaded, err := loadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.RestartInterval != "6h" {
+		t.Fatalf("saved RestartInterval = %q, want 6h", reloaded.RestartInterval)
+	}
+}
+
+func TestSettingsResponseIncludesRestartFields(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := writeConfig(configPath, Config{
+		Name:            "ScumVPN",
+		Port:            8888,
+		RestartInterval: "30m",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	supervisor := NewSupervisor("olcrtc", func(ctx context.Context, path string, loc Location) (*process, error) {
+		return &process{location: loc, logs: newLogBuffer(1), running: true}, nil
+	})
+	rs := NewRestartScheduler(configPath, supervisor)
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/api/settings", nil)
+	resp := settingsFromConfig(req, configPath, cfg, false, false, rs)
+	if !resp.RestartEnabled || resp.RestartInterval != "30m" || resp.NextRestartAt == "" {
+		t.Fatalf("settings response = %#v", resp)
+	}
+}
+
+func TestRestartSchedulerUpdateFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := writeConfig(configPath, Config{Name: "ScumVPN", Port: 8888}); err != nil {
+		t.Fatal(err)
+	}
+
+	supervisor := NewSupervisor("olcrtc", func(ctx context.Context, path string, loc Location) (*process, error) {
+		return &process{location: loc, logs: newLogBuffer(1), running: true}, nil
+	})
+	rs := NewRestartScheduler(configPath, supervisor)
+
+	before := time.Now()
+	rs.UpdateFromConfig(Config{RestartInterval: "30m"})
+	next := rs.NextAt()
+	if next.Before(before.Add(29*time.Minute)) || next.After(before.Add(31*time.Minute)) {
+		t.Fatalf("next restart = %v, want ~30m from %v", next, before)
+	}
+
+	rs.UpdateFromConfig(Config{RestartInterval: ""})
+	if !rs.NextAt().IsZero() {
+		t.Fatalf("next restart = %v, want zero when disabled", rs.NextAt())
+	}
+}
+
+func TestSupervisorRestartAll(t *testing.T) {
+	loc1 := testLocation("room-01", "Netherlands")
+	loc2 := testLocation("room-02", "Germany")
+	starts := 0
+	supervisor := NewSupervisor("olcrtc", func(ctx context.Context, path string, loc Location) (*process, error) {
+		starts++
+		return &process{
+			location: loc,
+			logs:     newLogBuffer(1),
+			running:  false,
+		}, nil
+	})
+
+	cfg := testConfig(loc1, loc2)
+	cfg.Clients = []Client{{
+		ClientID:  "user",
+		Locations: []Location{loc1, loc2},
+	}}
+	cfg.Normalize()
+	if err := supervisor.StartAll(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := supervisor.RestartAll(context.Background(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+	if starts != 4 {
+		t.Fatalf("start calls = %d, want 4", starts)
+	}
+}
+
 func TestParseProcStatusMemoryBytes(t *testing.T) {
 	data := []byte("Name:\tolcrtc\nVmPeak:\t  204800 kB\nVmRSS:\t   12345 kB\n")
 
@@ -948,4 +1098,8 @@ func testLocation(roomID, name string) Location {
 		Data:      "data",
 		DNS:       "1.1.1.1:53",
 	}
+}
+
+func ptrString(value string) *string {
+	return &value
 }
