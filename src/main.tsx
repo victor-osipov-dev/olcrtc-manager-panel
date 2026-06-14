@@ -389,6 +389,24 @@ function proxyFromState(proxy?: Partial<Socks5Proxy> & { port?: string | number 
   };
 }
 
+function locationStateToForm(location: LocationState): ClientLocationForm {
+  const { instance: jitsi_instance, room } =
+    location.carrier === "jitsi"
+      ? splitJitsiRoomId(location.room_id)
+      : { instance: DEFAULT_JITSI_INSTANCE, room: location.room_id };
+  return normalizeLocationForm({
+    name: location.name,
+    room_id: room,
+    jitsi_instance,
+    key: location.key,
+    carrier: location.carrier,
+    transport: location.transport,
+    payload: location.payload ?? {},
+    dns: location.dns,
+    proxy: proxyFromState(location.proxy),
+  });
+}
+
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText && window.isSecureContext) {
     await navigator.clipboard.writeText(text);
@@ -1353,23 +1371,7 @@ function App() {
 
   const openEditLocation = (client: ClientState, location: LocationState, index: number) => {
     setEditLocation({ client, location, index });
-    const { instance: jitsi_instance, room: jitsiRoom } =
-      location.carrier === "jitsi"
-        ? splitJitsiRoomId(location.room_id)
-        : { instance: DEFAULT_JITSI_INSTANCE, room: location.room_id };
-    setLocationForm(
-      normalizeLocationForm({
-        name: location.name,
-        room_id: location.carrier === "jitsi" ? jitsiRoom : location.room_id,
-        jitsi_instance,
-        key: location.key,
-        carrier: location.carrier,
-        transport: location.transport,
-        payload: location.payload ?? {},
-        dns: location.dns,
-        proxy: proxyFromState(location.proxy),
-      }),
-    );
+    setLocationForm(locationStateToForm(location));
   };
 
   const addClient = () =>
@@ -1424,16 +1426,7 @@ function App() {
       const nextLocations = editLocation.client.locations.map((location, index) =>
         index === editLocation.index
           ? locationForm
-          : {
-              name: location.name,
-              room_id: location.room_id,
-              key: location.key,
-              carrier: location.carrier,
-              transport: location.transport,
-              payload: location.payload ?? {},
-              dns: location.dns,
-              proxy: proxyFromState(location.proxy),
-            },
+          : locationStateToForm(location),
       );
       await request(`/api/clients/${encodeURIComponent(editLocation.client.client_id)}`, {
         method: "PUT",
